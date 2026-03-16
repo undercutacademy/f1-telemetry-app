@@ -3,6 +3,9 @@
   command = "npm run build"
   publish = "f1-telemetry-app/frontend/dist"
 
+[build.environment]
+  VITE_API_URL = "https://f1-telemetry-app-p498.onrender.com"
+
 [[redirects]]
   from   = "/*"
   to     = "/index.html"
