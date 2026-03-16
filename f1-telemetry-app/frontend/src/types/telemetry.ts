@@ -99,6 +99,7 @@ export interface LapInfo {
 export interface TelemetryRequest {
   year: number;
   event: string;
+  slug: string;
   session: string;
   drivers: string[];
   laps: (number | 'fastest')[];

@@ -159,9 +159,11 @@ function AppInner() {
       return;
     }
 
+    const slug = telemetry.events.find(e => e.name === event)?.slug ?? '';
     const request: TelemetryRequest = {
       year,
       event,
+      slug,
       session,
       drivers: drivers.map(d => d.abbr!),
       laps: drivers.map(d => d.lap!),
