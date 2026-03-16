@@ -1,0 +1,9 @@
+[build]
+  base    = "f1-telemetry-app/frontend"
+  command = "npm run build"
+  publish = "f1-telemetry-app/frontend/dist"
+
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200
