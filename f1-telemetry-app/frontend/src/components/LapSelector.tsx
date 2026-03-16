@@ -1,4 +1,3 @@
-import React from 'react';
 import type { LapInfo } from '../types/telemetry';
 import { TYRE_COLORS } from '../types/telemetry';
 import { adjustColorForTheme, getContrastColor } from '../utils/colors';
