@@ -9,14 +9,23 @@ import type {
   TelemetryRequest,
 } from '../types/telemetry';
 
-// ─── Axios Instance ───────────────────────────────────────────────────────────
+// ─── CDN base (static JSON files served via jsDelivr) ────────────────────────
+
+const CDN = (import.meta.env.VITE_DATA_CDN_URL ?? '').replace(/\/$/, '');
+
+async function cdnGet<T>(path: string): Promise<T> {
+  const url = `${CDN}/${path}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`CDN fetch failed: ${res.status} ${url}`);
+  return res.json() as Promise<T>;
+}
+
+// ─── Render backend — telemetry only ─────────────────────────────────────────
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? '/api',
-  timeout: 120_000, // 2 minutes — FastF1 can be slow on first load
+  timeout: 120_000,
 });
-
-// ─── Error Extraction Helper ──────────────────────────────────────────────────
 
 function extractErrorMessage(err: unknown): string {
   if (axios.isAxiosError(err)) {
@@ -32,7 +41,6 @@ function extractErrorMessage(err: unknown): string {
 // ─── Hook Types ───────────────────────────────────────────────────────────────
 
 export interface UseTelemetryReturn {
-  // Data
   years: number[];
   events: EventInfo[];
   sessions: SessionInfo[];
@@ -40,7 +48,6 @@ export interface UseTelemetryReturn {
   driversLaps: Record<string, LapInfo[]>;
   telemetryData: TelemetryData | null;
 
-  // Loading states
   loadingYears: boolean;
   loadingEvents: boolean;
   loadingSessions: boolean;
@@ -48,15 +55,13 @@ export interface UseTelemetryReturn {
   loadingDriverLaps: Record<string, boolean>;
   loadingTelemetry: boolean;
 
-  // Error
   error: string | null;
   clearError: () => void;
 
-  // Actions
   fetchEvents: (year: number) => Promise<void>;
-  fetchSessions: (year: number, event: string) => Promise<void>;
-  fetchDrivers: (year: number, event: string, session: string) => Promise<void>;
-  fetchDriverLaps: (year: number, event: string, session: string, driver: string) => Promise<void>;
+  fetchSessions: (year: number, event: string, slug: string) => Promise<void>;
+  fetchDrivers: (year: number, slug: string, session: string) => Promise<void>;
+  fetchDriverLaps: (year: number, slug: string, session: string, driver: string) => Promise<void>;
   fetchTelemetry: (request: TelemetryRequest) => Promise<void>;
   clearTelemetry: () => void;
 }
@@ -64,7 +69,6 @@ export interface UseTelemetryReturn {
 // ─── Main Hook ────────────────────────────────────────────────────────────────
 
 export function useTelemetry(): UseTelemetryReturn {
-  // Data state
   const [years, setYears] = useState<number[]>([]);
   const [events, setEvents] = useState<EventInfo[]>([]);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
@@ -72,7 +76,6 @@ export function useTelemetry(): UseTelemetryReturn {
   const [driversLaps, setDriversLaps] = useState<Record<string, LapInfo[]>>({});
   const [telemetryData, setTelemetryData] = useState<TelemetryData | null>(null);
 
-  // Loading states
   const [loadingYears, setLoadingYears] = useState(false);
   const [loadingEvents, setLoadingEvents] = useState(false);
   const [loadingSessions, setLoadingSessions] = useState(false);
@@ -80,18 +83,17 @@ export function useTelemetry(): UseTelemetryReturn {
   const [loadingDriverLaps, setLoadingDriverLaps] = useState<Record<string, boolean>>({});
   const [loadingTelemetry, setLoadingTelemetry] = useState(false);
 
-  // Error state
   const [error, setError] = useState<string | null>(null);
   const clearError = useCallback(() => setError(null), []);
 
-  // ─── Fetch Years on Mount ──────────────────────────────────────────────────
+  // ─── Years ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       setLoadingYears(true);
       try {
-        const res = await api.get<number[]>('/years');
-        if (!cancelled) setYears(res.data);
+        const data = await cdnGet<number[]>('index.json');
+        if (!cancelled) setYears(data);
       } catch (err) {
         if (!cancelled) setError(extractErrorMessage(err));
       } finally {
@@ -102,7 +104,7 @@ export function useTelemetry(): UseTelemetryReturn {
     return () => { cancelled = true; };
   }, []);
 
-  // ─── Fetch Events ──────────────────────────────────────────────────────────
+  // ─── Events ────────────────────────────────────────────────────────────────
   const fetchEvents = useCallback(async (year: number) => {
     setLoadingEvents(true);
     setEvents([]);
@@ -111,8 +113,8 @@ export function useTelemetry(): UseTelemetryReturn {
     setDriversLaps({});
     setError(null);
     try {
-      const res = await api.get<EventInfo[]>(`/events/${year}`);
-      setEvents(res.data);
+      const data = await cdnGet<EventInfo[]>(`${year}/events.json`);
+      setEvents(data);
     } catch (err) {
       setError(extractErrorMessage(err));
     } finally {
@@ -120,16 +122,16 @@ export function useTelemetry(): UseTelemetryReturn {
     }
   }, []);
 
-  // ─── Fetch Sessions ────────────────────────────────────────────────────────
-  const fetchSessions = useCallback(async (year: number, event: string) => {
+  // ─── Sessions ──────────────────────────────────────────────────────────────
+  const fetchSessions = useCallback(async (_year: number, _event: string, slug: string) => {
     setLoadingSessions(true);
     setSessions([]);
     setDrivers([]);
     setDriversLaps({});
     setError(null);
     try {
-      const res = await api.get<SessionInfo[]>(`/sessions/${year}/${encodeURIComponent(event)}`);
-      setSessions(res.data);
+      const data = await cdnGet<SessionInfo[]>(`${_year}/${slug}/sessions.json`);
+      setSessions(data);
     } catch (err) {
       setError(extractErrorMessage(err));
     } finally {
@@ -137,17 +139,15 @@ export function useTelemetry(): UseTelemetryReturn {
     }
   }, []);
 
-  // ─── Fetch Drivers ─────────────────────────────────────────────────────────
-  const fetchDrivers = useCallback(async (year: number, event: string, session: string) => {
+  // ─── Drivers ───────────────────────────────────────────────────────────────
+  const fetchDrivers = useCallback(async (year: number, slug: string, session: string) => {
     setLoadingDrivers(true);
     setDrivers([]);
     setDriversLaps({});
     setError(null);
     try {
-      const res = await api.get<DriverListItem[]>(
-        `/drivers/${year}/${encodeURIComponent(event)}/${encodeURIComponent(session)}`
-      );
-      setDrivers(res.data);
+      const data = await cdnGet<DriverListItem[]>(`${year}/${slug}/${session}/drivers.json`);
+      setDrivers(data);
     } catch (err) {
       setError(extractErrorMessage(err));
     } finally {
@@ -155,16 +155,14 @@ export function useTelemetry(): UseTelemetryReturn {
     }
   }, []);
 
-  // ─── Fetch Driver Laps ───────────────────────────────────────────────────
+  // ─── Driver Laps ───────────────────────────────────────────────────────────
   const fetchDriverLaps = useCallback(
-    async (year: number, event: string, session: string, driver: string) => {
+    async (year: number, slug: string, session: string, driver: string) => {
       setLoadingDriverLaps((prev) => ({ ...prev, [driver]: true }));
       setError(null);
       try {
-        const res = await api.get<LapInfo[]>(
-          `/laps/${year}/${encodeURIComponent(event)}/${encodeURIComponent(session)}/${encodeURIComponent(driver)}`
-        );
-        setDriversLaps((prev) => ({ ...prev, [driver]: res.data }));
+        const data = await cdnGet<LapInfo[]>(`${year}/${slug}/${session}/laps/${driver}.json`);
+        setDriversLaps((prev) => ({ ...prev, [driver]: data }));
       } catch (err) {
         setError(extractErrorMessage(err));
       } finally {
@@ -174,7 +172,7 @@ export function useTelemetry(): UseTelemetryReturn {
     []
   );
 
-  // ─── Fetch Telemetry ───────────────────────────────────────────────────────
+  // ─── Telemetry (stays on Render — needs heavy FastF1 processing) ───────────
   const fetchTelemetry = useCallback(async (request: TelemetryRequest) => {
     setLoadingTelemetry(true);
     setTelemetryData(null);

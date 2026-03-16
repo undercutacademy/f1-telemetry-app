@@ -5,6 +5,7 @@
 
 [build.environment]
   VITE_API_URL = "https://f1-telemetry-app-p498.onrender.com"
+  VITE_DATA_CDN_URL = "https://cdn.jsdelivr.net/gh/undercutacademy/f1-data@main"
 
 [[redirects]]
   from   = "/*"

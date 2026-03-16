@@ -58,6 +58,7 @@ export interface TelemetryData {
 export interface EventInfo {
   round: number;
   name: string;
+  slug: string;
   country: string;
   date: string;
 }

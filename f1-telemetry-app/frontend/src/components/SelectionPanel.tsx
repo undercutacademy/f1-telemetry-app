@@ -26,9 +26,9 @@ interface SelectionPanelProps {
   onReset: () => void;
 
   fetchEvents: (year: number) => Promise<void>;
-  fetchSessions: (year: number, event: string) => Promise<void>;
-  fetchDrivers: (year: number, event: string, session: string) => Promise<void>;
-  fetchDriverLaps: (year: number, event: string, session: string, driver: string) => Promise<void>;
+  fetchSessions: (year: number, event: string, slug: string) => Promise<void>;
+  fetchDrivers: (year: number, slug: string, session: string) => Promise<void>;
+  fetchDriverLaps: (year: number, slug: string, session: string, driver: string) => Promise<void>;
 
   collapsed?: boolean;
   onToggleCollapse?: () => void;
@@ -133,6 +133,9 @@ export default function SelectionPanel({
     setDriverLap,
   } = useSelections();
 
+  // ─── Slug lookup (CDN paths use slug, telemetry API uses event name) ────────
+  const eventSlug = events.find((e) => e.name === event)?.slug ?? '';
+
   // ─── Cascading fetch effects ─────────────────────────────────────────────
 
   // When year changes, fetch events
@@ -144,28 +147,28 @@ export default function SelectionPanel({
 
   // When event changes, fetch sessions
   useEffect(() => {
-    if (year !== null && event !== null) {
-      fetchSessions(year, event);
+    if (year !== null && event !== null && eventSlug) {
+      fetchSessions(year, event, eventSlug);
     }
-  }, [year, event, fetchSessions]);
+  }, [year, event, eventSlug, fetchSessions]);
 
   // When session changes, fetch drivers
   useEffect(() => {
-    if (year !== null && event !== null && session !== null) {
-      fetchDrivers(year, event, session);
+    if (year !== null && eventSlug && session !== null) {
+      fetchDrivers(year, eventSlug, session);
     }
-  }, [year, event, session, fetchDrivers]);
+  }, [year, eventSlug, session, fetchDrivers]);
 
   // When drivers change, fetch their laps if not fetched
   useEffect(() => {
-    if (year !== null && event !== null && session !== null) {
+    if (year !== null && eventSlug && session !== null) {
       drivers.forEach((d) => {
         if (d.abbr && !driversLaps[d.abbr] && !loadingDriverLaps[d.abbr]) {
-          fetchDriverLaps(year, event, session, d.abbr);
+          fetchDriverLaps(year, eventSlug, session, d.abbr);
         }
       });
     }
-  }, [year, event, session, drivers, driversLaps, loadingDriverLaps, fetchDriverLaps]);
+  }, [year, eventSlug, session, drivers, driversLaps, loadingDriverLaps, fetchDriverLaps]);
 
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
