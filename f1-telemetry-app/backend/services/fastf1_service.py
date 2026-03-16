@@ -14,18 +14,23 @@ from services import cache
 _loaded_sessions: dict = {}
 
 
-def _session_key(year: int, event, session_type: str) -> str:
-    return f"{year}:{event}:{session_type}"
+def load_session(year: int, event, session_type: str, telemetry: bool = False, laps: bool = True):
+    """Load and cache a FastF1 session object.
 
-
-def load_session(year: int, event, session_type: str):
-    """Load and cache a FastF1 session object. event can be round int or event name string."""
-    key = _session_key(year, str(event), session_type)
+    Uses separate cache keys per load level so a light load (drivers)
+    never blocks a full load (telemetry) and vice-versa.
+    Memory tiers:
+      - laps=False, telemetry=False  → ~20 MB  (results/drivers only)
+      - laps=True,  telemetry=False  → ~80 MB  (lap timing)
+      - laps=True,  telemetry=True   → ~400 MB (full car data, only for telemetry route)
+    """
+    level = "full" if telemetry else ("laps" if laps else "light")
+    key = f"{year}:{event}:{session_type}:{level}"
     if key in _loaded_sessions:
         return _loaded_sessions[key]
 
     session = fastf1.get_session(year, event, session_type)
-    session.load(telemetry=True, laps=True, weather=False)
+    session.load(telemetry=telemetry, laps=laps, weather=False)
     _loaded_sessions[key] = session
     return session
 
@@ -170,7 +175,7 @@ def get_drivers(year: int, event, session_type: str) -> list[dict]:
     if cached:
         return cached
 
-    session = load_session(year, event, session_type)
+    session = load_session(year, event, session_type, telemetry=False, laps=False)
     results = session.results
 
     drivers = []
@@ -207,7 +212,7 @@ def get_laps(year: int, event, session_type: str, driver_abbr: str) -> list[dict
     if cached:
         return cached
 
-    session = load_session(year, event, session_type)
+    session = load_session(year, event, session_type, telemetry=False, laps=True)
     driver_laps = session.laps.pick_driver(driver_abbr)
 
     if driver_laps.empty:
@@ -240,12 +245,12 @@ def get_laps(year: int, event, session_type: str, driver_abbr: str) -> list[dict
             and abs(lap_time_seconds - fastest_time) < 0.001
         )
 
-        # Check if telemetry is available
-        try:
-            tel = lap.get_telemetry()
-            has_telemetry = tel is not None and not tel.empty and len(tel) > 10
-        except Exception:
-            has_telemetry = False
+        # A lap has usable telemetry if it has a valid lap time and isn't an in/out lap
+        has_telemetry = (
+            lap_time_seconds is not None
+            and lap_time_seconds > 60
+            and str(lap.get("TrackStatus", "1")) in ("1", "2", "4", "6", "")
+        )
 
         result.append({
             "lap_number": int(lap["LapNumber"]) if pd.notna(lap.get("LapNumber")) else 0,

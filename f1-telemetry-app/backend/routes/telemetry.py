@@ -47,7 +47,7 @@ def get_telemetry(req: TelemetryRequest):
         return cached
 
     try:
-        session = fastf1_service.load_session(req.year, req.event, req.session)
+        session = fastf1_service.load_session(req.year, req.event, req.session, telemetry=True, laps=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load session: {e}")
 
