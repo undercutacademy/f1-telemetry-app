@@ -170,6 +170,19 @@ export default function SelectionPanel({
     }
   }, [year, eventSlug, session, drivers, driversLaps, loadingDriverLaps, fetchDriverLaps]);
 
+  // Auto-select fastest lap when laps finish loading
+  useEffect(() => {
+    if (year !== null && eventSlug && session !== null) {
+      drivers.forEach((d, index) => {
+        if (d.abbr && d.lap === null && driversLaps[d.abbr]) {
+          const laps = driversLaps[d.abbr];
+          const best = laps.find(l => l.is_fastest && l.is_valid) ?? laps.find(l => l.is_valid);
+          if (best) setDriverLap(index, best.lap_number);
+        }
+      });
+    }
+  }, [driversLaps, drivers, year, eventSlug, session, setDriverLap]);
+
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
   const getDriverInfo = (abbr: string | null) =>
