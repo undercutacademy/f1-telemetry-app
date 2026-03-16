@@ -34,7 +34,7 @@ def load_session(year: int, event, session_type: str):
 
 def get_years() -> list[int]:
     current_year = datetime.now().year
-    return list(range(2018, current_year + 1))
+    return list(range(current_year, 2017, -1))
 
 
 # ─── Events ───────────────────────────────────────────────────────────────────
@@ -69,6 +69,8 @@ def get_events(year: int) -> list[dict]:
             "format": str(row.get("EventFormat", "conventional")),
         })
 
+    events.reverse()
+
     # Use short TTL for current year so new events appear quickly
     current_year = datetime.now().year
     ttl = 600 if year >= current_year else cache.CACHE_TTL_SECONDS
@@ -94,8 +96,8 @@ _SESSION_NAME_ALIASES = {
     "Sprint Shootout": ["Sprint Qualifying"],
 }
 
-_CONVENTIONAL_SESSIONS = ["FP1", "FP2", "FP3", "Q", "R"]
-_SPRINT_SESSIONS = ["FP1", "Q", "SQ", "S", "R"]
+_CONVENTIONAL_SESSIONS = ["R", "Q", "FP3", "FP2", "FP1"]
+_SPRINT_SESSIONS = ["R", "S", "SQ", "Q", "FP1"]
 
 
 def get_sessions(year: int, event) -> list[dict]:
