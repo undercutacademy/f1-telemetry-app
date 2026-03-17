@@ -60,7 +60,7 @@ function StyledSelect({
   const isDisabled = disabled || loading;
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-1">
+    <div className="flex w-full min-w-0 flex-col gap-1 sm:flex-1">
       <label htmlFor={id} className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
         {label}
       </label>
@@ -245,7 +245,7 @@ export default function SelectionPanel({
       <div className="mx-auto max-w-screen-2xl px-4 py-3 sm:px-6">
 
         {/* ── Row 1: Dropdowns ── */}
-        <div className="flex flex-wrap items-end gap-3">
+        <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end">
           {/* Year */}
           <StyledSelect
             id="sel-year"
@@ -338,7 +338,7 @@ export default function SelectionPanel({
           )}
 
           {/* Action Buttons */}
-          <div className="flex flex-shrink-0 items-end gap-2 pb-0">
+          <div className="col-span-2 flex items-center gap-2 sm:col-span-1 sm:flex-shrink-0 sm:items-end sm:pb-0">
             <button
               onClick={onLoadTelemetry}
               disabled={!canLoad}
