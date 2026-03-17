@@ -189,7 +189,7 @@ function buildLayout(
       font: { size: 12, color: textColor },
       traceorder: 'normal',
     },
-    margin: { t: 50, r: 15, b: 55, l: 80 },
+    margin: { t: 50, r: 15, b: 55, l: 52 },
     hovermode: 'x',
     hoverdistance: 1,
     hoverlabel: {
