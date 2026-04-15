@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmd.exe /c \"gh api user\")",
+      "Bash(powershell.exe -Command \"gh api user | ConvertFrom-Json | Select-Object login, email, name\")",
+      "Bash(powershell.exe -Command \"where.exe gh\")",
+      "Bash(powershell.exe -Command \"Test-Path ''C:\\\\Program Files\\\\GitHub CLI\\\\gh.exe''\")",
+      "Bash(powershell.exe -Command \"& ''C:\\\\Program Files\\\\GitHub CLI\\\\gh.exe'' api user\")",
+      "Bash(powershell.exe -Command \"& ''C:\\\\Program Files\\\\GitHub CLI\\\\gh.exe'' repo create f1-telemetry-app --public --source=. --remote=origin --push\")",
+      "Bash(powershell.exe -Command \"npm install -g netlify-cli\")",
+      "Bash(powershell.exe -Command \"netlify --version\")",
+      "Bash(powershell.exe -Command \"netlify sites:create --name f1-overcut-academy\")",
+      "Bash(powershell.exe -Command \"netlify api listAccountsForUser\")",
+      "Bash(powershell.exe -Command \"netlify api createSite --data ''''{\"\"account_slug\"\": \"\"undercutacademy\"\", \"\"body\"\": {\"\"name\"\": \"\"f1-overcut-academy\"\"}}''''\")",
+      "Bash(Select-String -Pattern \"id|name|url\")",
+      "Bash(powershell.exe -Command \"netlify api createSite --data ''{\"\"account_slug\"\": \"\"undercutacademy\"\", \"\"body\"\": {\"\"name\"\": \"\"f1-overcut-academy\"\"}}'' | ConvertFrom-Json | Select-Object id, name, url\")",
+      "Bash(powershell.exe -Command \":*)",
+      "Bash(powershell.exe -File \"C:\\\\Users\\\\lucas\\\\AppData\\\\Local\\\\Temp\\\\netlify_create.ps1\")",
+      "Bash(powershell.exe -Command \"netlify status --json 2>&1\")",
+      "Bash(powershell.exe -Command \"Get-Content $env:APPDATA\\\\netlify\\\\config.json\")",
+      "Bash(powershell.exe -Command \"Get-Content \\(Join-Path $env:USERPROFILE ''.netlify\\\\config.json''\\)\")",
+      "Bash(powershell.exe -Command \"Get-Content ''C:\\\\Users\\\\lucas\\\\.netlify\\\\config.json''\")",
+      "Bash(powershell.exe -Command \"Get-ChildItem ''C:\\\\Users\\\\lucas\\\\AppData\\\\Local\\\\netlify'' -Recurse -ErrorAction SilentlyContinue | Select-Object FullName\")",
+      "Bash(powershell.exe -Command \"Get-ChildItem ''C:\\\\Users\\\\lucas\\\\AppData\\\\Roaming\\\\netlify'' -Recurse -ErrorAction SilentlyContinue | Select-Object FullName; Get-ChildItem ''C:\\\\Users\\\\lucas\\\\AppData\\\\Local\\\\npm-cache'' -Filter ''*netlify*'' -ErrorAction SilentlyContinue | Select-Object FullName\")"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\lucas\\AppData\\Local\\Temp"
+    ]
+  }
+}
