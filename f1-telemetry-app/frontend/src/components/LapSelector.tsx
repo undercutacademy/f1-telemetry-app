@@ -171,8 +171,8 @@ export default function LapSelector({
               return (
                 <tr
                   key={lap.lap_number}
-                  onClick={() => onSelectLap(lap.lap_number)}
-                  className="cursor-pointer transition-colors duration-100"
+                  onClick={isInvalid ? undefined : () => onSelectLap(lap.lap_number)}
+                  className={`transition-colors duration-100 ${isInvalid ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                   style={{
                     backgroundColor: isSelected
                       ? adjustedColor + '22'
@@ -185,7 +185,7 @@ export default function LapSelector({
                     opacity: isInvalid ? 0.5 : 1,
                   }}
                   onMouseEnter={(e) => {
-                    if (!isSelected) {
+                    if (!isSelected && !isInvalid) {
                       (e.currentTarget as HTMLTableRowElement).style.backgroundColor =
                         adjustedColor + '11';
                     }
@@ -196,7 +196,7 @@ export default function LapSelector({
                         'transparent';
                     }
                   }}
-                  title={isInvalid ? 'Invalid lap (track limits / pit in/out)' : undefined}
+                  title={isInvalid ? 'No telemetry available for this lap' : undefined}
                 >
                   {/* Lap number */}
                   <td className="px-2 py-1.5">
