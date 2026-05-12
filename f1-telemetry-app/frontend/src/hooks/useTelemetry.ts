@@ -20,18 +20,27 @@ const MIRRORS = [
   (p: string) => `https://rawcdn.githack.com/${REPO}/${BRANCH}/${p}`,
 ];
 
+// Race all mirrors in parallel; first 2xx response wins, others are aborted.
+// Eliminates the sequential-fallback latency tax when the primary mirror is slow.
 async function cdnGet<T>(path: string): Promise<T> {
-  let lastErr: unknown;
-  for (const mirror of MIRRORS) {
-    try {
-      const res = await fetch(mirror(path));
-      if (res.ok) return res.json() as Promise<T>;
-      lastErr = new Error(`${res.status} ${mirror(path)}`);
-    } catch (e) {
-      lastErr = e;
-    }
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 6000);
+
+  const tryMirror = async (url: string): Promise<T> => {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`${res.status} ${url}`);
+    return res.json() as Promise<T>;
+  };
+
+  try {
+    return await Promise.any(MIRRORS.map((m) => tryMirror(m(path))));
+  } catch (err) {
+    const errors = err instanceof AggregateError ? err.errors : [err];
+    throw new Error(`CDN fetch failed: ${path} — ${errors.map(String).join('; ')}`);
+  } finally {
+    clearTimeout(timeout);
+    ctrl.abort();
   }
-  throw new Error(`CDN fetch failed: ${path} — ${lastErr}`);
 }
 
 // ─── Signal processing (replaces Python backend) ─────────────────────────────
