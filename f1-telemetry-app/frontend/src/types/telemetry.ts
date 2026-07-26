@@ -10,6 +10,10 @@ export interface TelemetryChannels {
   lateral_g: number[];
   longitudinal_g: number[];
   faster_segments: number[];
+  drs: number[];
+  actions: number[];
+  elevation: number[];   // meters; [] when session has no z data
+  vertical_g: number[];  // [] when session has no z data
 }
 
 // ─── Driver Information ───────────────────────────────────────────────────────

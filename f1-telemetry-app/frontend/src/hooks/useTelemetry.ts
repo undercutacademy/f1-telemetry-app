@@ -150,6 +150,27 @@ function computeFasterSegments(speeds: number[][]): boolean[][] {
   );
 }
 
+const DRS_OPEN = new Set([10, 12, 14]);
+
+// Spec priority order — codes are stable and rendered by ChartStack's ACTION_CATEGORIES.
+function computeActions(throttle: number[], brake: number[], lateralG: number[]): number[] {
+  return throttle.map((t, i) => {
+    if (brake[i] > 0) return 0;                  // Braking
+    if (t >= 98) return 1;                       // Full Throttle
+    if (t <= 5) return 2;                        // Lift & Coast
+    if (Math.abs(lateralG[i] ?? 0) >= 1.5) return 3; // Cornering
+    return 4;                                    // Rolling
+  });
+}
+
+function computeVerticalG(elevation: number[], time: number[]): number[] {
+  if (elevation.length !== NUM_POINTS) return [];
+  const dt = npGrad(time).map(v => (Math.abs(v) < 1e-6 ? 1e-6 : v));
+  const vz = npGrad(elevation).map((dz, i) => dz / dt[i]);
+  const az = npGrad(vz).map((dv, i) => dv / dt[i] / 9.81);
+  return clamp(movingAvg(az), -6, 6).map(v => Math.round(v * 1e4) / 1e4);
+}
+
 // ─── Raw telemetry CDN file shape ─────────────────────────────────────────────
 
 interface RawTelFile {
@@ -163,6 +184,7 @@ interface RawTelFile {
   time: number[];
   x: number[];
   y: number[];
+  z?: number[];
 }
 
 // ─── Hook Types ───────────────────────────────────────────────────────────────
@@ -356,6 +378,10 @@ export function useTelemetry(): UseTelemetryReturn {
           brake:    nearestBefore(d, tel.brake,   commonDist),
           x:        tel.x.length ? linearInterp(d, tel.x, commonDist) : [],
           y:        tel.y.length ? linearInterp(d, tel.y, commonDist) : [],
+          drs:      tel.drs && tel.drs.length
+            ? nearestBefore(d, tel.drs.map(v => (DRS_OPEN.has(v) ? 1 : 0)), commonDist)
+            : new Array(NUM_POINTS).fill(0),
+          elevation: tel.z && tel.z.length ? linearInterp(d, tel.z, commonDist) : [],
         };
       });
 
@@ -371,6 +397,12 @@ export function useTelemetry(): UseTelemetryReturn {
       // Compute faster segments
       const speeds = normalized.map(n => n.speed);
       const fasterSegs = computeFasterSegments(speeds);
+
+      // Compute vertical G-forces and actions
+      const verticalGs = normalized.map(n => computeVerticalG(n.elevation, n.time));
+      const actions = normalized.map((n, i) =>
+        computeActions(n.throttle, n.brake, accels[i].lateral_g)
+      );
 
       // Look up driver metadata from loaded state
       const driverMeta = driverAbbrs.map(abbr =>
@@ -417,6 +449,10 @@ export function useTelemetry(): UseTelemetryReturn {
             lateral_g:       accels[i].lateral_g,
             longitudinal_g:  accels[i].longitudinal_g,
             faster_segments: fasterSegs[i].map(v => v ? 1 : 0),
+            drs:             normalized[i].drs,
+            actions:         actions[i],
+            elevation:       normalized[i].elevation,
+            vertical_g:      verticalGs[i],
           },
         })),
       };
