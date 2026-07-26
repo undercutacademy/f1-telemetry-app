@@ -115,14 +115,22 @@ function buildTraces(
     const yAxis = `y${axisNum === 1 ? '' : axisNum}` as PlotData['yaxis'];
 
     if (cfg.isHeatmap) {
-      // One lane per driver; reversed so driver 0 is the top row
+      // One lane per driver; reversed so driver 0 is the top row.
+      // IMPORTANT: `y` must be a numeric row index, not the driver
+      // abbreviation string. Plotly's heatmap calc step throws
+      // ("Cannot read properties of undefined (reading 'length')")
+      // when multiple single-row heatmap traces share an axis and each
+      // supplies a distinct string category in `y` — its category
+      // consolidation across traces breaks. Numeric `y` + `tickvals`/
+      // `ticktext` on the axis (set in buildLayout) renders identical
+      // per-driver lanes without that crash.
       for (let d = drivers.length - 1; d >= 0; d--) {
         const dn = drivers[d];
         const codes = dn.channels.actions;
         if (!codes || !codes.length) continue;
         traces.push({
           x: distance,
-          y: [dn.abbreviation],
+          y: [d],
           z: [codes],
           type: 'heatmap',
           xaxis: xAxis,
@@ -251,7 +259,8 @@ function buildLayout(
   isDark: boolean,
   maxDistance: number,
   cornerShapes: Partial<Layout['shapes'][0]>[],
-  cornerAnnotations: Partial<Layout['annotations'][0]>[]
+  cornerAnnotations: Partial<Layout['annotations'][0]>[],
+  driverAbbrs: string[]
 ): Partial<Layout> {
   const bgColor = isDark ? '#111111' : '#F8F9FA';
   const paperBg = isDark ? '#111111' : '#F8F9FA';
@@ -340,24 +349,50 @@ function buildLayout(
       maxallowed: maxDistance + 50,
     };
 
-    const yAxisConfig: Partial<LayoutAxis> = {
-      domain: yDomain, // vertical slice for this subplot
-      anchor: `x${axisNum === 1 ? '' : axisNum}` as any,
-      title: {
-        text: cfg.title,
-        font: { size: 10, color: textColor },
-        standoff: 5,
-      },
-      showgrid: true,
-      gridcolor: gridColor,
-      gridwidth: 1,
-      zeroline: cfg.isDelta || cfg.channel === 'lateral_g' || cfg.channel === 'longitudinal_g' || cfg.channel === 'vertical_g',
-      zerolinecolor: zeroLineColor,
-      zerolinewidth: 1,
-      tickfont: { size: 9, color: textColor },
-      ...(cfg.yRange ? { range: cfg.yRange } : {}),
-      fixedrange: true,
-    };
+    const yAxisConfig: Partial<LayoutAxis> = cfg.isHeatmap
+      ? {
+          // Driver "lanes": each heatmap trace uses a numeric row index for
+          // `y` (see buildTraces) rather than the driver abbreviation
+          // string — Plotly's heatmap calc step throws when multiple
+          // single-row heatmap traces share an axis and each supplies a
+          // distinct string category. tickvals/ticktext relabel the
+          // numeric rows with driver abbreviations so it still reads as a
+          // categorical lane axis.
+          domain: yDomain,
+          anchor: `x${axisNum === 1 ? '' : axisNum}` as any,
+          title: {
+            text: cfg.title,
+            font: { size: 10, color: textColor },
+            standoff: 5,
+          },
+          tickmode: 'array',
+          tickvals: driverAbbrs.map((_, i) => i),
+          ticktext: driverAbbrs,
+          // Reversed range so row 0 (driver 0) renders as the TOP lane
+          range: [driverAbbrs.length - 0.5, -0.5],
+          showgrid: false,
+          zeroline: false,
+          tickfont: { size: 9, color: textColor },
+          fixedrange: true,
+        }
+      : {
+          domain: yDomain, // vertical slice for this subplot
+          anchor: `x${axisNum === 1 ? '' : axisNum}` as any,
+          title: {
+            text: cfg.title,
+            font: { size: 10, color: textColor },
+            standoff: 5,
+          },
+          showgrid: true,
+          gridcolor: gridColor,
+          gridwidth: 1,
+          zeroline: cfg.isDelta || cfg.channel === 'lateral_g' || cfg.channel === 'longitudinal_g' || cfg.channel === 'vertical_g',
+          zerolinecolor: zeroLineColor,
+          zerolinewidth: 1,
+          tickfont: { size: 9, color: textColor },
+          ...(cfg.yRange ? { range: cfg.yRange } : {}),
+          fixedrange: true,
+        };
 
     (layout as Record<string, unknown>)[xAxisKey] = xAxisConfig;
     (layout as Record<string, unknown>)[yAxisKey] = yAxisConfig;
@@ -443,9 +478,14 @@ export default function ChartStack({ telemetryData, theme }: ChartStackProps) {
   const cornerShapesRef = useRef(cornerShapes);
   cornerShapesRef.current = cornerShapes;
 
+  const driverAbbrs = useMemo(
+    () => telemetryData.drivers.map(d => d.abbreviation),
+    [telemetryData.drivers]
+  );
+
   const layout = useMemo(
-    () => buildLayout(activeConfigs, isDark, maxDistance, cornerShapes, cornerAnnotations),
-    [activeConfigs, isDark, maxDistance, cornerShapes, cornerAnnotations]
+    () => buildLayout(activeConfigs, isDark, maxDistance, cornerShapes, cornerAnnotations, driverAbbrs),
+    [activeConfigs, isDark, maxDistance, cornerShapes, cornerAnnotations, driverAbbrs]
   );
 
   const config: Partial<Config> = useMemo(
