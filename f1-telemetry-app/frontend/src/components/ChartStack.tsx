@@ -3,6 +3,7 @@ import Plotly from 'plotly.js-dist-min';
 import type { Layout, PlotData, Config, LayoutAxis } from 'plotly.js';
 import type { TelemetryData, TelemetryChannels } from '../types/telemetry';
 import { adjustColorForTheme, offsetTeamColor } from '../utils/colors';
+import ChannelToggles, { useChannelToggles } from './ChannelToggles';
 
 interface ChartStackProps {
   telemetryData: TelemetryData;
@@ -14,68 +15,155 @@ interface ChartStackProps {
 interface ChartConfig {
   title: string;
   channel: keyof TelemetryChannels;
+  label: string;          // chip label
+  defaultOn: boolean;
+  weight: number;
   yRange?: [number, number];
   isStep?: boolean;
   isDelta?: boolean;
   isFill?: boolean;
+  isHeatmap?: boolean;     // actions lanes
+  firstDriverOnly?: boolean; // elevation
+  needsElevation?: boolean;  // disable chip when session has no z
   unit?: string;
 }
 
 const CHART_CONFIGS: ChartConfig[] = [
-  { title: 'Speed (km/h)', channel: 'speed', yRange: [0, 380], unit: 'km/h' },
-  { title: 'Delta Time (s)', channel: 'delta_time', unit: 's', isDelta: true },
-  { title: 'RPM', channel: 'rpm', yRange: [5000, 14000], unit: 'RPM' },
-  { title: 'Gear', channel: 'gear', yRange: [0, 9], isStep: true },
-  { title: 'Throttle (%)', channel: 'throttle', yRange: [0, 100], unit: '%', isFill: true },
-  { title: 'Brake', channel: 'brake', yRange: [-0.1, 1.1], isStep: true, isFill: true },
-  { title: 'Lateral G', channel: 'lateral_g', unit: 'G' },
-  { title: 'Long. G', channel: 'longitudinal_g', unit: 'G' },
+  { title: 'Speed (km/h)', channel: 'speed', label: 'Speed', defaultOn: true, weight: 3, yRange: [0, 380], unit: 'km/h' },
+  { title: 'Delta Time (s)', channel: 'delta_time', label: 'Delta', defaultOn: true, weight: 1, unit: 's', isDelta: true },
+  { title: 'RPM', channel: 'rpm', label: 'RPM', defaultOn: true, weight: 1, yRange: [5000, 14000], unit: 'RPM' },
+  { title: 'Gear', channel: 'gear', label: 'Gear', defaultOn: true, weight: 1.5, yRange: [0, 9], isStep: true },
+  { title: 'Throttle (%)', channel: 'throttle', label: 'Throttle', defaultOn: true, weight: 1, yRange: [0, 100], unit: '%', isFill: true },
+  { title: 'Brake', channel: 'brake', label: 'Brake', defaultOn: true, weight: 1, yRange: [-0.1, 1.1], isStep: true, isFill: true },
+  { title: 'Lateral G', channel: 'lateral_g', label: 'Lat G', defaultOn: true, weight: 1, unit: 'G' },
+  { title: 'Long. G', channel: 'longitudinal_g', label: 'Long G', defaultOn: true, weight: 1, unit: 'G' },
+  { title: 'DRS', channel: 'drs', label: 'DRS', defaultOn: false, weight: 0.7, yRange: [-0.1, 1.1], isStep: true },
+  { title: 'Actions', channel: 'actions', label: 'Actions', defaultOn: false, weight: 1, isHeatmap: true },
+  { title: 'Elevation (m)', channel: 'elevation', label: 'Elev', defaultOn: false, weight: 1, unit: 'm', firstDriverOnly: true, needsElevation: true },
+  { title: 'Vertical G', channel: 'vertical_g', label: 'Vert G', defaultOn: false, weight: 1, unit: 'G', needsElevation: true },
 ];
+
+// Action-lane categorical palette — validated against the `dataviz` skill's
+// six-check validator (scripts/validate_palette.js) for both light (#fcfcfb)
+// and dark (#1a1a19) chart surfaces. The brief's original hex/order (Tailwind
+// red-500/green-500/amber-500/blue-500/gray-400) failed the adjacent-pair CVD
+// check and (in dark mode) the lightness band, regardless of order. Swapping
+// in the dataviz skill's validated categorical steps (same hue families, in
+// an order that clears the adjacent-pair CVD gate: Braking, Full Throttle,
+// Lift & Coast, Cornering, Rolling) passes lightness band, CVD separation
+// (warn band, >=6) and the normal-vision floor (>=15) — but only with
+// mode-specific steps: the light-surface amber (`#EDA100`) is too light to
+// clear the dark-surface lightness band, so dark mode uses the skill's
+// dark-stepped hues (same hue families, re-stepped darker/less bright).
+// "Rolling" (gray) intentionally reads as low-chroma — it represents a
+// neutral/coasting state, not a color meant to compete with the four active
+// hues. Each cell also carries a hover tooltip label (secondary encoding),
+// which the skill requires for any pair in the CVD warn band.
+const ACTION_CATEGORIES_LIGHT = [
+  { code: 0, label: 'Braking',       color: '#E34948' },
+  { code: 1, label: 'Full Throttle', color: '#008300' },
+  { code: 2, label: 'Lift & Coast',  color: '#EDA100' },
+  { code: 3, label: 'Cornering',     color: '#2A78D6' },
+  { code: 4, label: 'Rolling',       color: '#898781' },
+];
+
+const ACTION_CATEGORIES_DARK = [
+  { code: 0, label: 'Braking',       color: '#E66767' },
+  { code: 1, label: 'Full Throttle', color: '#008300' },
+  { code: 2, label: 'Lift & Coast',  color: '#C98500' },
+  { code: 3, label: 'Cornering',     color: '#3987E5' },
+  { code: 4, label: 'Rolling',       color: '#898781' },
+];
+
+function actionCategories(isDark: boolean) {
+  return isDark ? ACTION_CATEGORIES_DARK : ACTION_CATEGORIES_LIGHT;
+}
 
 // ─── Build subplot layout ─────────────────────────────────────────────────────
 
-const NUM_CHARTS = CHART_CONFIGS.length; // 8
 const GAP = 0.012; // gap between subplots
 
-// Speed chart is 3×, Gear chart is 1.5×, others are 1×
-const CHART_WEIGHTS = CHART_CONFIGS.map((cfg) => {
-  if (cfg.channel === 'speed') return 3;
-  if (cfg.channel === 'gear') return 1.5;
-  return 1;
-});
-const TOTAL_WEIGHT = CHART_WEIGHTS.reduce((a, b) => a + b, 0); // 10.5
-const TOTAL_GAP = GAP * (NUM_CHARTS - 1);
-const UNIT_HEIGHT = (1 - TOTAL_GAP) / TOTAL_WEIGHT;
+function totalWeight(configs: ChartConfig[]): number {
+  return configs.reduce((a, c) => a + c.weight, 0);
+}
 
-function getSubplotDomain(row: number): [number, number] {
-  // Accumulate vertical space consumed by rows above this one
+function getSubplotDomain(configs: ChartConfig[], row: number): [number, number] {
+  const unit = (1 - GAP * (configs.length - 1)) / totalWeight(configs);
   let topOffset = 0;
-  for (let i = 0; i < row; i++) {
-    topOffset += CHART_WEIGHTS[i] * UNIT_HEIGHT + GAP;
-  }
-  const chartHeight = CHART_WEIGHTS[row] * UNIT_HEIGHT;
+  for (let i = 0; i < row; i++) topOffset += configs[i].weight * unit + GAP;
   const top = 1 - topOffset;
-  const bottom = top - chartHeight;
+  const bottom = top - configs[row].weight * unit;
   return [Math.max(0, bottom), Math.min(1, top)];
 }
 
 // ─── Build traces for each chart ─────────────────────────────────────────────
 
 function buildTraces(
+  configs: ChartConfig[],
   telemetryData: TelemetryData,
-  driverColors: string[]
+  driverColors: string[],
+  isDark: boolean
 ): Partial<PlotData>[] {
   const traces: Partial<PlotData>[] = [];
   const distance = telemetryData.distance;
   const drivers = telemetryData.drivers;
+  const actionCats = actionCategories(isDark);
 
-  CHART_CONFIGS.forEach((cfg, idx) => {
+  configs.forEach((cfg, idx) => {
     const axisNum = idx + 1; // 1-indexed
     const xAxis = `x${axisNum === 1 ? '' : axisNum}` as PlotData['xaxis'];
     const yAxis = `y${axisNum === 1 ? '' : axisNum}` as PlotData['yaxis'];
 
-    // Ensure first driver has the channel
-    if (!drivers.length || !drivers[0].channels[cfg.channel]) return;
+    if (cfg.isHeatmap) {
+      // One lane per driver; reversed so driver 0 is the top row
+      for (let d = drivers.length - 1; d >= 0; d--) {
+        const dn = drivers[d];
+        const codes = dn.channels.actions;
+        if (!codes || !codes.length) continue;
+        traces.push({
+          x: distance,
+          y: [dn.abbreviation],
+          z: [codes],
+          type: 'heatmap',
+          xaxis: xAxis,
+          yaxis: yAxis,
+          colorscale: actionCats.flatMap((c, i, arr) => [
+            [i / arr.length, c.color], [(i + 1) / arr.length, c.color],
+          ]) as Array<[number, string]>,
+          zmin: -0.5,
+          zmax: 4.5,
+          showscale: false,
+          text: [codes.map(c => actionCats[c]?.label ?? '')] as unknown as string[],
+          hovertemplate: `%{text}<extra>${dn.abbreviation}</extra>`,
+          showlegend: false,
+        } as unknown as Partial<PlotData>);
+      }
+      return;
+    }
+
+    if (cfg.firstDriverOnly) {
+      const vals = drivers[0].channels[cfg.channel] as number[];
+      if (!vals || !vals.length) return;
+      traces.push({
+        x: distance,
+        y: vals,
+        type: 'scatter',
+        mode: 'lines',
+        name: 'Elevation',
+        xaxis: xAxis,
+        yaxis: yAxis,
+        line: { color: driverColors[0], width: 1.5, shape: 'linear' },
+        fill: 'tozeroy',
+        showlegend: false,
+        hovertemplate: `%{y:.1f} m<extra>Elevation</extra>`,
+      });
+      return;
+    }
+
+    // Ensure first driver has the channel (and it isn't an empty array —
+    // this hides Elevation/Vert-G/DRS traces for sessions without the data)
+    const first = drivers[0]?.channels[cfg.channel];
+    if (!first || !(first as number[]).length) return;
 
     const lineShape = cfg.isStep ? 'hv' : 'linear';
 
@@ -159,6 +247,7 @@ function buildTraces(
 // ─── Build layout ─────────────────────────────────────────────────────────────
 
 function buildLayout(
+  configs: ChartConfig[],
   isDark: boolean,
   maxDistance: number,
   cornerShapes: Partial<Layout['shapes'][0]>[],
@@ -200,8 +289,8 @@ function buildLayout(
     },
     dragmode: 'pan',
     uirevision: 'telemetry',
-    images: CHART_CONFIGS.map((_, idx) => {
-      const [bottom, top] = getSubplotDomain(idx);
+    images: configs.map((_, idx) => {
+      const [bottom, top] = getSubplotDomain(configs, idx);
       const height = top - bottom;
       return {
         source: isDark ? '/Overcut.White.Letters.png' : '/Overcut.Black.Letters.png',
@@ -220,10 +309,10 @@ function buildLayout(
   };
 
   // Build axis configurations for each chart
-  CHART_CONFIGS.forEach((cfg, idx) => {
+  configs.forEach((cfg, idx) => {
     const axisNum = idx + 1;
-    const yDomain = getSubplotDomain(idx); // vertical position [bottom, top]
-    const isLast = idx === NUM_CHARTS - 1;
+    const yDomain = getSubplotDomain(configs, idx); // vertical position [bottom, top]
+    const isLast = idx === configs.length - 1;
     const isFirst = idx === 0;
 
     const xAxisKey = `xaxis${axisNum === 1 ? '' : axisNum}` as keyof Layout;
@@ -262,7 +351,7 @@ function buildLayout(
       showgrid: true,
       gridcolor: gridColor,
       gridwidth: 1,
-      zeroline: cfg.isDelta || cfg.channel === 'lateral_g' || cfg.channel === 'longitudinal_g',
+      zeroline: cfg.isDelta || cfg.channel === 'lateral_g' || cfg.channel === 'longitudinal_g' || cfg.channel === 'vertical_g',
       zerolinecolor: zeroLineColor,
       zerolinewidth: 1,
       tickfont: { size: 9, color: textColor },
@@ -282,10 +371,27 @@ function buildLayout(
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
+const DEFAULT_TOGGLES = Object.fromEntries(CHART_CONFIGS.map(c => [c.channel, c.defaultOn]));
+
 export default function ChartStack({ telemetryData, theme }: ChartStackProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const isDark = theme === 'dark';
+
+  const [enabled, toggle] = useChannelToggles(DEFAULT_TOGGLES);
+  const hasElevation = (telemetryData.drivers[0]?.channels.elevation?.length ?? 0) > 0;
+
+  const activeConfigs = useMemo(
+    () => CHART_CONFIGS.filter(c => enabled[c.channel] && !(c.needsElevation && !hasElevation)),
+    [enabled, hasElevation]
+  );
+
+  const toggleItems = CHART_CONFIGS.map(c => ({
+    key: c.channel,
+    label: c.label,
+    disabled: c.needsElevation && !hasElevation,
+    disabledReason: 'No elevation data for this session',
+  }));
 
   const driverColors = useMemo(() => {
     const counts = new Map<string, number>();
@@ -298,8 +404,8 @@ export default function ChartStack({ telemetryData, theme }: ChartStackProps) {
   }, [telemetryData.drivers, theme]);
 
   const traces = useMemo(
-    () => buildTraces(telemetryData, driverColors),
-    [telemetryData, driverColors]
+    () => buildTraces(activeConfigs, telemetryData, driverColors, isDark),
+    [activeConfigs, telemetryData, driverColors, isDark]
   );
 
   const maxDistance = telemetryData.distance.length > 0
@@ -338,8 +444,8 @@ export default function ChartStack({ telemetryData, theme }: ChartStackProps) {
   cornerShapesRef.current = cornerShapes;
 
   const layout = useMemo(
-    () => buildLayout(isDark, maxDistance, cornerShapes, cornerAnnotations),
-    [isDark, maxDistance, cornerShapes, cornerAnnotations]
+    () => buildLayout(activeConfigs, isDark, maxDistance, cornerShapes, cornerAnnotations),
+    [activeConfigs, isDark, maxDistance, cornerShapes, cornerAnnotations]
   );
 
   const config: Partial<Config> = useMemo(
@@ -357,6 +463,7 @@ export default function ChartStack({ telemetryData, theme }: ChartStackProps) {
   // Update plot data/layout when telemetry or theme changes; attach crosshair
   useEffect(() => {
     if (!containerRef.current) return;
+    if (activeConfigs.length === 0) return;
     const el = containerRef.current;
 
     Plotly.react(el, traces as PlotData[], layout, config);
@@ -413,7 +520,7 @@ export default function ChartStack({ telemetryData, theme }: ChartStackProps) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (el as any).removeListener?.('plotly_unhover', onUnhover);
     };
-  }, [traces, layout, config, isDark]);
+  }, [traces, layout, config, isDark, activeConfigs]);
 
   // Resize observer lives independently — never torn down on data updates
   useEffect(() => {
@@ -426,8 +533,8 @@ export default function ChartStack({ telemetryData, theme }: ChartStackProps) {
     return () => resizeObserver.disconnect();
   }, []);
 
-  // Speed = 3 units, others = 1 unit each → 10 units × 170px + margins
-  const plotHeight = TOTAL_WEIGHT * 170 + 100;
+  // Speed = 3 units, others = 1 unit each → total weight × 170px + margins
+  const plotHeight = totalWeight(activeConfigs) * 170 + 100;
 
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-chart)] overflow-hidden">
@@ -457,12 +564,23 @@ export default function ChartStack({ telemetryData, theme }: ChartStackProps) {
         </div>
       </div>
 
+      <ChannelToggles items={toggleItems} enabled={enabled} onToggle={toggle} />
+
       {/* Chart area */}
-      <div
-        ref={containerRef}
-        style={{ height: `${plotHeight}px`, width: '100%' }}
-        className="no-transition"
-      />
+      {activeConfigs.length === 0 ? (
+        <div
+          style={{ height: `${plotHeight}px`, width: '100%' }}
+          className="flex items-center justify-center text-sm text-[var(--text-secondary)]"
+        >
+          No channels selected
+        </div>
+      ) : (
+        <div
+          ref={containerRef}
+          style={{ height: `${plotHeight}px`, width: '100%' }}
+          className="no-transition"
+        />
+      )}
     </div>
   );
 }
