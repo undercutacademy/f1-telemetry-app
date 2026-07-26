@@ -98,6 +98,16 @@ function getSubplotDomain(configs: ChartConfig[], row: number): [number, number]
 
 // ─── Build traces for each chart ─────────────────────────────────────────────
 
+// The in-plot driver legend can only be rendered from a "normal" per-driver
+// line trace — Delta, Actions (heatmap), and Elevation (firstDriverOnly)
+// traces all force showlegend: false. Find the first active config eligible
+// to host it; returns -1 if none qualify (e.g. only Delta+Actions+Elevation
+// are enabled), in which case no subplot shows a legend and the title bar's
+// driver list is the only legend.
+function firstLegendEligibleIndex(configs: ChartConfig[]): number {
+  return configs.findIndex(c => !c.isDelta && !c.isHeatmap && !c.firstDriverOnly);
+}
+
 function buildTraces(
   configs: ChartConfig[],
   telemetryData: TelemetryData,
@@ -108,6 +118,7 @@ function buildTraces(
   const distance = telemetryData.distance;
   const drivers = telemetryData.drivers;
   const actionCats = actionCategories(isDark);
+  const legendIdx = firstLegendEligibleIndex(configs);
 
   configs.forEach((cfg, idx) => {
     const axisNum = idx + 1; // 1-indexed
@@ -240,7 +251,7 @@ function buildTraces(
           width: 1.5,
           shape: lineShape,
         },
-        showlegend: idx === 0, // only show legend for first chart
+        showlegend: idx === legendIdx, // only show legend on the first eligible chart
         legendgroup: dn.abbreviation,
         hovertemplate: cfg.unit
           ? `%{y:.1f} ${cfg.unit}<extra>${dn.abbreviation}</extra>`
@@ -562,7 +573,13 @@ export default function ChartStack({ telemetryData, theme }: ChartStackProps) {
     };
   }, [traces, layout, config, isDark, activeConfigs]);
 
-  // Resize observer lives independently — never torn down on data updates
+  // Resize observer lives independently — never torn down on data updates.
+  // Re-runs whenever the chart container mounts/unmounts (i.e. when
+  // activeConfigs toggles between empty and non-empty), since the
+  // placeholder div renders in place of the chart container when no
+  // channels are active and containerRef.current would otherwise stay
+  // null forever if all chips started off.
+  const hasActiveChart = activeConfigs.length > 0;
   useEffect(() => {
     if (!containerRef.current) return;
     const el = containerRef.current;
@@ -571,7 +588,7 @@ export default function ChartStack({ telemetryData, theme }: ChartStackProps) {
     });
     resizeObserver.observe(el);
     return () => resizeObserver.disconnect();
-  }, []);
+  }, [hasActiveChart]);
 
   // Speed = 3 units, others = 1 unit each → total weight × 170px + margins
   const plotHeight = totalWeight(activeConfigs) * 170 + 100;
