@@ -130,6 +130,90 @@ def compute_accelerations(tel: pd.DataFrame, common_dist: np.ndarray) -> dict:
     }
 
 
+DRS_OPEN = {10, 12, 14}
+
+
+def compute_drs(tel: pd.DataFrame, common_dist: np.ndarray) -> list:
+    """
+    Map raw DRS status codes to open/closed (1/0), nearest-before normalized
+    onto the common distance grid — mirrors useTelemetry's drs normalization.
+    """
+    n = len(common_dist)
+    if "DRS" not in tel.columns:
+        return [0] * n
+
+    dist = tel["Distance"].values
+    raw = tel["DRS"].values
+    open_flags = np.array([1 if v in DRS_OPEN else 0 for v in raw])
+
+    indices = np.searchsorted(dist, common_dist, side="right") - 1
+    indices = np.clip(indices, 0, len(dist) - 1)
+    return open_flags[indices].tolist()
+
+
+def get_elevation(tel: pd.DataFrame, common_dist: np.ndarray) -> list:
+    """
+    Interpolated elevation channel (Z * 0.1 to convert to meters), or []
+    when the telemetry has no Z column — mirrors useTelemetry's elevation.
+    """
+    if "Z" not in tel.columns:
+        return []
+
+    dist = tel["Distance"].values
+    z = tel["Z"].values.astype(float) * 0.1
+    return np.interp(common_dist, dist, z).tolist()
+
+
+def compute_actions(throttle, brake, lateral_g):
+    """Per-point driver action class. Priority: braking, full throttle,
+    lift & coast, cornering, rolling — mirrors useTelemetry.computeActions."""
+    out = []
+    for i in range(len(throttle)):
+        if brake[i] > 0:
+            out.append(0)
+        elif throttle[i] >= 98:
+            out.append(1)
+        elif throttle[i] <= 5:
+            out.append(2)
+        elif abs(lateral_g[i]) >= 1.5:
+            out.append(3)
+        else:
+            out.append(4)
+    return out
+
+
+def _moving_avg(vals: np.ndarray, k: int = 7) -> np.ndarray:
+    """
+    Edge-corrected moving average matching the TS `movingAvg`: at the edges
+    the window is truncated (not zero-padded) and divided by the actual
+    number of samples in range. `np.convolve(..., mode="same")` zero-pads
+    at the edges instead, which would diverge from the TS output there —
+    so this is an explicit windowed loop instead, to keep exact parity.
+    """
+    n = vals.shape[0]
+    half = k // 2
+    out = np.empty(n, dtype=float)
+    for i in range(n):
+        lo = max(0, i - half)
+        hi = min(n, i + half + 1)
+        out[i] = vals[lo:hi].mean()
+    return out
+
+
+def compute_vertical_g(elevation, time_s):
+    """d²z/dt² in G, smoothed and clamped — mirrors useTelemetry.computeVerticalG."""
+    z = np.asarray(elevation, dtype=float)
+    if z.size == 0 or z.size != NUM_POINTS:
+        return []
+    t = np.asarray(time_s, dtype=float)
+    dt = np.gradient(t)
+    dt[np.abs(dt) < 1e-6] = 1e-6
+    vz = np.gradient(z) / dt
+    az = np.gradient(vz) / dt / 9.81
+    az = _moving_avg(az)
+    return np.round(np.clip(az, -6, 6), 4).tolist()
+
+
 def compute_faster_segments(speeds: list[list]) -> list[list[bool]]:
     """
     For each distance point, determine which driver is fastest.

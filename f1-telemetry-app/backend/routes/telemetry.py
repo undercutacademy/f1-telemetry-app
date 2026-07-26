@@ -82,6 +82,18 @@ def get_telemetry(req: TelemetryRequest):
     for i in range(len(tels)):
         norm["drivers"][i]["channels"]["faster_segments"] = faster_segments_list[i]
 
+    # DRS, elevation, actions, vertical G — new telemetry channels
+    for i, tel in enumerate(tels):
+        channels = norm["drivers"][i]["channels"]
+        channels["drs"] = processing.compute_drs(tel, common_dist)
+        channels["elevation"] = processing.get_elevation(tel, common_dist)
+        channels["actions"] = processing.compute_actions(
+            channels["throttle"], channels["brake"], channels["lateral_g"]
+        )
+        channels["vertical_g"] = processing.compute_vertical_g(
+            channels["elevation"], channels["time"]
+        )
+
     # Track coordinates (use first driver's telemetry for track shape)
     track_x, track_y = processing.get_track_coords(tels[0], common_dist)
 
