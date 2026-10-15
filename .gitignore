@@ -39,3 +39,6 @@ npm-debug.log*
 
 # Local Netlify folder
 .netlify
+
+# Browser-automation artifacts (screenshots, page snapshots)
+.playwright-mcp/
