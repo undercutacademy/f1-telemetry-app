@@ -12,7 +12,9 @@ This repository contains the **OAT-F1 telemetry analyzer** (Overcut Academy). Th
 Two other locations matter, even though they are separate repos checked out elsewhere on disk and listed as additional working directories:
 
 - `C:\Users\lucas\OneDrive\Desktop\Cursor Projects\f1-data\scripts\` — the data-ingestion scripts that populate the CDN.
-- `C:\Users\lucas\OneDrive\Desktop\Cursor Projects\f1-data\.github\workflows\` — the GitHub Actions that run those scripts (auto-process every 2h, backfill, schedule update).
+- `C:\Users\lucas\OneDrive\Desktop\Cursor Projects\f1-data\.github\workflows\` — the GitHub Actions: `cloud-ingest.yml` (primary ingester, every 15 min), schedule update (every 6 h), and manual-only backfill / probe workflows.
+
+**How sessions get ingested (since Oct 2026):** F1's livetiming feed (what FastF1 reads) returns 403 to GitHub/datacenter IPs, so the primary path is `cloud-ingest.yml` → `scripts/cloud_ingest.py` → `scripts/openf1_session.py`, which builds the same files from OpenF1 (api.openf1.org; free tier releases a session ~30 min after it ends). `scripts/local_ingest.py` (FastF1, home PC, Windows task every 30 min) is a fallback that waits an extra 1.5 h so the cloud normally wins. OpenF1 lap timestamps are snapped onto each circuit's finish line using `scripts/start_lines.json` (rebuild with `scripts/build_start_lines.py` when a new circuit appears; without an entry, laps keep OpenF1's raw boundaries and start up to ~150 m past the line). Session dates in `sessions.json` are UTC.
 
 ## Architecture — the important thing to internalize
 
