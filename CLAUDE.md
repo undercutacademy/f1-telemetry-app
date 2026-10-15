@@ -29,7 +29,9 @@ What this means concretely:
 
 - All data fetching is in [useTelemetry.ts](f1-telemetry-app/frontend/src/hooks/useTelemetry.ts), which hits `cdn.jsdelivr.net/gh/undercutacademy/f1-data@master/...` with a fallback chain of three mirrors.
 - The data is **pre-normalized to a 500-point common distance grid** by `process_session.py`. The frontend still does its own normalization on top (in case driver laps differ in length), plus delta-time, faster-segment, and G-force computation — that signal-processing code is a TypeScript port of `backend/services/processing.py`. **If you change one, you almost always need to change the other** to keep parity.
-- The CDN tree shape is `<year>/<event-slug>/<session-type>/{drivers.json, corners.json, laps/<DRV>.json, telemetry/<DRV>_<lap>.json}` plus `<year>/events.json` and a top-level `index.json` listing available years. Event slugs come from `slugify()` in `process_session.py` (lowercase, non-alphanumerics → `-`).
+- The CDN tree shape is `<year>/<event-slug>/<session-type>/{drivers.json, corners.json, laps/<DRV>.json, telemetry/<DRV>_<lap>.json, analysis.json, weather.json}` plus `<year>/events.json` and a top-level `index.json` listing available years. Event slugs come from `slugify()` in `process_session.py` (lowercase, non-alphanumerics → `-`).
+- `analysis.json` (every driver's every lap with stint/position/pit flags/session clock/track status/`has_telemetry`, plus official results) and `weather.json` are **optional**: only sessions processed after Oct 2026, or added by `scripts/backfill_analysis.py`, have them. The frontend (`useSessionAnalysis.ts`) gives `analysis.json` a short head start, then rebuilds the same view from `laps/*.json` (stints inferred, positions from cumulative times) — keep that fallback working. Telemetry files from the same date on also carry `driver_ahead` / `dist_ahead`; older ones don't, and the Gap/Dist Ahead chips disable themselves.
+- Prefer adding new files over changing existing ones: stale mirrors can serve the old version of a changed file (rawcdn.githack caches branch URLs ~permanently).
 - The FastAPI backend exposes the same data shape (events/sessions/drivers/laps/telemetry routes), but the production frontend does not call it. Backend changes do not ship anywhere unless you also rewire the frontend.
 
 When deciding where to make a change:
@@ -45,6 +47,8 @@ When deciding where to make a change:
 - Backend on `http://localhost:8111` (uvicorn, `--reload`)
 - Frontend on `http://localhost:3111` (Vite dev server)
 - API docs on `http://localhost:8111/docs`
+
+To test against data that isn't on the CDN yet (e.g. a session you just processed with `F1_DATA_OUT=<dir> python scripts/process_session.py ...`), serve that tree with CORS headers and start the dev server with `VITE_LOCAL_DATA_URL=http://127.0.0.1:<port>`; in dev builds it replaces the CDN mirrors entirely.
 
 Vite is configured to proxy `/api/*` to the backend (see [vite.config.ts](f1-telemetry-app/frontend/vite.config.ts)), but **the production code path does not use that proxy** — it goes straight to the CDN. To exercise the backend locally you have to wire the frontend to call it (`useTelemetry.ts` would need to be swapped to hit `/api/...` instead of `cdnGet(...)`).
 
@@ -85,7 +89,9 @@ There are no test or lint scripts wired up in `package.json` or the backend. Typ
 
 - **State**: `useSelections` (Zustand, in [hooks/useSelections.ts](f1-telemetry-app/frontend/src/hooks/useSelections.ts)) owns year/event/session/drivers selection. Changing a parent selection resets all downstream selections — preserve that cascade if you add new selectors.
 - **Theming**: `ThemeContext` toggles a `dark` class on `<html>`; all colors are CSS variables (`var(--bg-page)`, `var(--text-primary)`, `var(--panel-bg)`, `var(--border)`, `var(--text-secondary)`, `var(--bg-chart)`). Tailwind is configured with `darkMode: 'class'`. Don't hardcode hex colors in components — go through the CSS vars or `utils/colors.ts` (which has `adjustColorForTheme`, `offsetTeamColor`, `getContrastColor` for team-color manipulation).
-- **Charts**: [components/ChartStack.tsx](f1-telemetry-app/frontend/src/components/ChartStack.tsx) builds a single Plotly figure with 8 stacked subplots (Speed/Delta/RPM/Gear/Throttle/Brake/Lat-G/Long-G). Subplot heights are weighted (Speed 3×, Gear 1.5×, others 1×). The "faster_segments" channel is per-driver booleans-as-0/1 used to colorize the speed trace.
+- **Charts**: [components/ChartStack.tsx](f1-telemetry-app/frontend/src/components/ChartStack.tsx) builds a single Plotly figure with up to 14 stacked, toggleable subplots (Speed/Delta/RPM/Gear/Throttle/Brake/Lat-G/Long-G on by default; DRS/Actions/Elevation/Vert-G/Gap Ahead/Dist Ahead off). Subplot heights are weighted (Speed 3×, Gear 1.5×, others 1×). The "faster_segments" channel is per-driver booleans-as-0/1 used by the track map's "speed advantage" mode.
+- **Session analysis**: [components/analysis/](f1-telemetry-app/frontend/src/components/analysis/) holds the session-wide tabs (lap times, heatmap, stints, sectors, tyre strategy, race trace, positions, weather), shown as soon as a session is picked. Pure data logic lives in [utils/sessionAnalysis.ts](f1-telemetry-app/frontend/src/utils/sessionAnalysis.ts); new charts should use `ChartCard` + `PlotlyChart` so they get theming, the watermark and PNG export. Clicking a lap in these charts loads its telemetry (`handlePickLap` in App.tsx).
+- **Share links**: the compared selection is mirrored into `?y=&e=<slug>&s=&d=NOR-12,VER-15` ([utils/shareUrl.ts](f1-telemetry-app/frontend/src/utils/shareUrl.ts)); App.tsx restores it step by step as the year → event → session → drivers data arrives.
 - **Lap selection**: `LapInfo.is_valid` means the lap has usable telemetry (not in/out lap, not under red flag — see backend `get_laps`). Laps where `is_valid === false` must remain visually disabled and unclickable in `LapSelector` — this was an explicit fix in the recent commit history.
 
 ## A few conventions surfaced from recent work
