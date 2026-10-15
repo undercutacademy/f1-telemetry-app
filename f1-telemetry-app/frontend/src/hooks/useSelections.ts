@@ -14,10 +14,14 @@ interface SelectionsState {
   setYear: (year: number) => void;
   setEvent: (event: string) => void;
   setSession: (session: string) => void;
-  addDriver: () => void;
+  addDriver: (init?: DriverSelection) => void;
   removeDriver: (index: number) => void;
   setDriverAbbr: (index: number, abbr: string) => void;
   setDriverLap: (index: number, lap: number | 'fastest') => void;
+  /** Driver and lap in one step, so the fastest-lap auto-select doesn't override the lap. */
+  setDriver: (index: number, abbr: string, lap: number) => void;
+  /** Replace the whole driver list (restoring a shared link). Pads to the 2-driver minimum. */
+  setDrivers: (drivers: DriverSelection[]) => void;
   reset: () => void;
 }
 
@@ -60,9 +64,9 @@ export const useSelections = create<SelectionsState>((set) => ({
       drivers: initialDrivers,
     }),
 
-  addDriver: () =>
+  addDriver: (init) =>
     set((state) => ({
-      drivers: [...state.drivers, { abbr: null, lap: null }],
+      drivers: [...state.drivers, init ?? { abbr: null, lap: null }],
     })),
 
   removeDriver: (index) =>
@@ -84,6 +88,18 @@ export const useSelections = create<SelectionsState>((set) => ({
       const newDrivers = [...state.drivers];
       newDrivers[index] = { ...newDrivers[index], lap };
       return { drivers: newDrivers };
+    }),
+
+  setDriver: (index, abbr, lap) =>
+    set((state) => {
+      const newDrivers = [...state.drivers];
+      newDrivers[index] = { abbr, lap };
+      return { drivers: newDrivers };
+    }),
+
+  setDrivers: (drivers) =>
+    set({
+      drivers: [...drivers, ...initialDrivers].slice(0, Math.max(2, Math.min(5, drivers.length))),
     }),
 
   reset: () => set(initialState),

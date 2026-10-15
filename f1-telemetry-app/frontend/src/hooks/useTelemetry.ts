@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type {
   EventInfo,
   SessionInfo,
@@ -14,33 +14,99 @@ import type {
 const REPO = 'undercutacademy/f1-data';
 const BRANCH = 'master';
 
-const MIRRORS = [
+// NOTE: statically must use the `@BRANCH` form. The `/BRANCH/` form 301-redirects
+// to an http:// URL, which browsers block as mixed content on our HTTPS origin.
+const CDN_MIRRORS = [
   (p: string) => `https://cdn.jsdelivr.net/gh/${REPO}@${BRANCH}/${p}`,
-  (p: string) => `https://cdn.statically.io/gh/${REPO}/${BRANCH}/${p}`,
+  (p: string) => `https://cdn.statically.io/gh/${REPO}@${BRANCH}/${p}`,
   (p: string) => `https://rawcdn.githack.com/${REPO}/${BRANCH}/${p}`,
 ];
 
-// Race all mirrors in parallel; first 2xx response wins, others are aborted.
-// Eliminates the sequential-fallback latency tax when the primary mirror is slow.
-async function cdnGet<T>(path: string): Promise<T> {
-  const ctrl = new AbortController();
-  const timeout = setTimeout(() => ctrl.abort(), 6000);
+// Dev-only: VITE_LOCAL_DATA_URL points at a locally served f1-data tree (e.g. a
+// freshly processed session that is not on the CDN yet). It replaces the CDN
+// mirrors entirely so stale CDN copies can't win the race.
+const LOCAL_DATA_URL = import.meta.env.DEV ? import.meta.env.VITE_LOCAL_DATA_URL : undefined;
+const MIRRORS = LOCAL_DATA_URL
+  ? [(p: string) => `${LOCAL_DATA_URL.replace(/\/$/, '')}/${p}`]
+  : CDN_MIRRORS;
+
+// Race all mirrors in parallel; first 2xx response wins, the rest are aborted.
+// Each mirror gets its OWN AbortController so one mirror's timeout (or a transient
+// network drop, e.g. ERR_NETWORK_CHANGED on a wifi/VPN switch) cannot kill the
+// others. A shared controller made any brief stall fail all three at once.
+const MIRROR_TIMEOUT_MS = 8000;
+
+async function raceMirrors<T>(path: string): Promise<T> {
+  const controllers: AbortController[] = [];
 
   const tryMirror = async (url: string): Promise<T> => {
-    const res = await fetch(url, { signal: ctrl.signal });
-    if (!res.ok) throw new Error(`${res.status} ${url}`);
-    return res.json() as Promise<T>;
+    const ctrl = new AbortController();
+    controllers.push(ctrl);
+    const timeout = setTimeout(() => ctrl.abort(), MIRROR_TIMEOUT_MS);
+    try {
+      // redirect: 'error' surfaces a mirror that bounces us to an insecure URL
+      // as a normal failure instead of a browser mixed-content console error.
+      const res = await fetch(url, { signal: ctrl.signal, redirect: 'error' });
+      if (!res.ok) throw new Error(`${res.status} ${url}`);
+      return (await res.json()) as T;
+    } finally {
+      clearTimeout(timeout);
+    }
   };
 
   try {
     return await Promise.any(MIRRORS.map((m) => tryMirror(m(path))));
-  } catch (err) {
-    const errors = err instanceof AggregateError ? err.errors : [err];
-    throw new Error(`CDN fetch failed: ${path} — ${errors.map(String).join('; ')}`);
   } finally {
-    clearTimeout(timeout);
-    ctrl.abort();
+    // Cancel the losers so we stop downloading data we no longer need.
+    controllers.forEach((c) => c.abort());
   }
+}
+
+export async function cdnGet<T>(path: string): Promise<T> {
+  // One retry: a transient network change aborts in-flight requests across every
+  // mirror at once, and that is recoverable rather than a real fetch failure.
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await raceMirrors<T>(path);
+    } catch (err) {
+      lastErr = err;
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+  const errors = lastErr instanceof AggregateError ? lastErr.errors : [lastErr];
+  throw new Error(`CDN fetch failed: ${path} — ${errors.map(String).join('; ')}`);
+}
+
+// For files that only exist for some sessions (analysis.json, weather.json).
+// Resolves null once two mirrors agree on a 404 instead of waiting for the slow
+// mirror's timeout. One 404 alone is not trusted: a stale mirror 404s a file
+// that was pushed after it last refreshed.
+export async function cdnGetOptional<T>(path: string): Promise<T | null> {
+  const needed = Math.min(2, MIRRORS.length);
+  const controllers: AbortController[] = [];
+  let notFound = 0;
+
+  const result = await new Promise<T | null>((resolve) => {
+    let settled = 0;
+    MIRRORS.forEach(async (m) => {
+      const ctrl = new AbortController();
+      controllers.push(ctrl);
+      const timeout = setTimeout(() => ctrl.abort(), MIRROR_TIMEOUT_MS);
+      try {
+        const res = await fetch(m(path), { signal: ctrl.signal, redirect: 'error' });
+        if (res.ok) { resolve((await res.json()) as T); return; }
+        if (res.status === 404 && ++notFound >= needed) resolve(null);
+      } catch { /* timeout / network: just lose the race */ }
+      finally {
+        clearTimeout(timeout);
+        if (++settled === MIRRORS.length) resolve(null);
+      }
+    });
+  });
+
+  controllers.forEach((c) => c.abort());
+  return result;
 }
 
 // ─── Signal processing (replaces Python backend) ─────────────────────────────
@@ -67,7 +133,7 @@ function linearInterp(srcDist: number[], srcVals: number[], targetDist: number[]
   });
 }
 
-function nearestBefore(srcDist: number[], srcVals: number[], targetDist: number[]): number[] {
+function nearestBefore<T>(srcDist: number[], srcVals: T[], targetDist: number[]): T[] {
   const n = srcDist.length;
   return targetDist.map(d => {
     let lo = 0, hi = n;
@@ -171,6 +237,26 @@ function computeVerticalG(elevation: number[], time: number[]): number[] {
   return clamp(movingAvg(az), -6, 6).map(v => Math.round(v * 1e4) / 1e4);
 }
 
+// Time gap to the car ahead: how long this driver, on this lap's own
+// time-vs-distance profile, takes to reach the spot where the car ahead is now.
+// (Dividing the distance by instantaneous speed instead spikes in every slow
+// corner.) Points past the line wrap onto the same lap profile.
+function computeGapAhead(distAhead: number[], dist: number[], time: number[]): number[] {
+  const n = dist.length;
+  if (n < 2) return distAhead.map(() => NaN);
+  const lapLen = dist[n - 1];
+  const lapTime = time[n - 1] - time[0];
+  const timeAt = (x: number): number => {
+    const laps = Math.floor(x / lapLen);
+    const [t] = linearInterp(dist, time, [x - laps * lapLen]);
+    return t + laps * lapTime;
+  };
+  return distAhead.map((d, i) => {
+    if (!Number.isFinite(d) || d < 0) return NaN;
+    return Math.round((timeAt(dist[i] + d) - time[i]) * 1e3) / 1e3;
+  });
+}
+
 // ─── Raw telemetry CDN file shape ─────────────────────────────────────────────
 
 interface RawTelFile {
@@ -185,6 +271,8 @@ interface RawTelFile {
   x: number[];
   y: number[];
   z?: number[];
+  driver_ahead?: string[];        // driver numbers; '' = none
+  dist_ahead?: (number | null)[]; // meters; null = unknown
 }
 
 // ─── Hook Types ───────────────────────────────────────────────────────────────
@@ -235,14 +323,13 @@ export function useTelemetry(): UseTelemetryReturn {
   const [error, setError] = useState<string | null>(null);
   const clearError = useCallback(() => setError(null), []);
 
-  const [_events, _setEvents] = useState<EventInfo[]>([]);
-  const [_drivers, _setDrivers] = useState<DriverListItem[]>([]);
-  const [_driversLaps, _setDriversLaps] = useState<Record<string, LapInfo[]>>({});
+  // Latest values for fetchTelemetry. Refs, not mirrored state: a mirror lags
+  // one render, so a compare fired right after laps load would see stale laps.
+  const driversRef = useRef(drivers);
+  driversRef.current = drivers;
+  const driversLapsRef = useRef(driversLaps);
+  driversLapsRef.current = driversLaps;
 
-  // keep internal refs in sync for use inside callbacks
-  useEffect(() => { _setEvents(events); }, [events]);
-  useEffect(() => { _setDrivers(drivers); }, [drivers]);
-  useEffect(() => { _setDriversLaps(driversLaps); }, [driversLaps]);
 
   // ─── Years ─────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -331,6 +418,8 @@ export function useTelemetry(): UseTelemetryReturn {
 
     try {
       const { year, slug, session, drivers: driverAbbrs, laps } = request;
+      const _drivers = driversRef.current;
+      const _driversLaps = driversLapsRef.current;
 
       // Resolve 'fastest' to actual lap numbers using loaded laps state
       const resolvedLaps = driverAbbrs.map((abbr, i) => {
@@ -382,6 +471,13 @@ export function useTelemetry(): UseTelemetryReturn {
             ? nearestBefore(d, tel.drs.map(v => (DRS_OPEN.has(v) ? 1 : 0)), commonDist)
             : new Array(NUM_POINTS).fill(0),
           elevation: tel.z && tel.z.length ? linearInterp(d, tel.z, commonDist) : [],
+          // null → NaN so interpolation leaves a gap instead of drawing to zero
+          dist_ahead: tel.dist_ahead && tel.dist_ahead.length
+            ? linearInterp(d, tel.dist_ahead.map(v => (v === null ? NaN : v)), commonDist)
+            : [],
+          driver_ahead: tel.driver_ahead && tel.driver_ahead.length
+            ? nearestBefore(d, tel.driver_ahead, commonDist)
+            : [],
         };
       });
 
@@ -410,6 +506,10 @@ export function useTelemetry(): UseTelemetryReturn {
           abbreviation: abbr, full_name: abbr, number: '', team: '', team_color: '#FFFFFF',
         }
       );
+
+      // Telemetry names the car ahead by racing number; show abbreviations instead.
+      const abbrByNumber = new Map(_drivers.map(d => [d.number, d.abbreviation]));
+      const gapsAhead = normalized.map(n => computeGapAhead(n.dist_ahead, commonDist, n.time));
 
       // Look up lap times
       const lapTimes = driverAbbrs.map((abbr, i) => {
@@ -453,6 +553,9 @@ export function useTelemetry(): UseTelemetryReturn {
             actions:         actions[i],
             elevation:       normalized[i].elevation,
             vertical_g:      verticalGs[i],
+            dist_ahead:      normalized[i].dist_ahead,
+            gap_ahead:       gapsAhead[i],
+            driver_ahead:    normalized[i].driver_ahead.map(num => (num ? abbrByNumber.get(num) ?? `#${num}` : '')),
           },
         })),
       };
@@ -463,7 +566,7 @@ export function useTelemetry(): UseTelemetryReturn {
     } finally {
       setLoadingTelemetry(false);
     }
-  }, [_driversLaps, _drivers]);
+  }, []);
 
   const clearTelemetry = useCallback(() => {
     setTelemetryData(null);

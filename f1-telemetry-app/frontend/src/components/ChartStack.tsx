@@ -4,10 +4,14 @@ import type { Layout, PlotData, Config, LayoutAxis } from 'plotly.js';
 import type { TelemetryData, TelemetryChannels } from '../types/telemetry';
 import { adjustColorForTheme, offsetTeamColor } from '../utils/colors';
 import ChannelToggles, { useChannelToggles } from './ChannelToggles';
+import { downloadChart } from './analysis/PlotlyChart';
+import { DownloadIcon, smallButton } from './analysis/ChartCard';
 
 interface ChartStackProps {
   telemetryData: TelemetryData;
   theme: 'dark' | 'light';
+  /** Used for the exported image's title. */
+  label?: string;
 }
 
 // ─── Chart configuration ──────────────────────────────────────────────────────
@@ -25,6 +29,7 @@ interface ChartConfig {
   isHeatmap?: boolean;     // actions lanes
   firstDriverOnly?: boolean; // elevation
   needsElevation?: boolean;  // disable chip when session has no z
+  needsAhead?: boolean;      // disable chip when telemetry has no car-ahead data
   unit?: string;
 }
 
@@ -41,6 +46,8 @@ const CHART_CONFIGS: ChartConfig[] = [
   { title: 'Actions', channel: 'actions', label: 'Actions', defaultOn: false, weight: 1, isHeatmap: true },
   { title: 'Elevation (m)', channel: 'elevation', label: 'Elev', defaultOn: false, weight: 1, unit: 'm', firstDriverOnly: true, needsElevation: true },
   { title: 'Vertical G', channel: 'vertical_g', label: 'Vert G', defaultOn: false, weight: 1, unit: 'G', needsElevation: true },
+  { title: 'Gap Ahead (s)', channel: 'gap_ahead', label: 'Gap Ahead', defaultOn: false, weight: 1, unit: 's', needsAhead: true },
+  { title: 'Dist. Ahead (m)', channel: 'dist_ahead', label: 'Dist Ahead', defaultOn: false, weight: 1, unit: 'm', needsAhead: true },
 ];
 
 // Action-lane categorical palette — validated against the `dataviz` skill's
@@ -238,6 +245,9 @@ function buildTraces(
 
       if (!chn) continue;
 
+      // Car-ahead channels also say who the car ahead is.
+      const ahead = cfg.needsAhead ? dn.channels.driver_ahead : null;
+
       traces.push({
         x: distance,
         y: chn as number[],
@@ -253,9 +263,16 @@ function buildTraces(
         },
         showlegend: idx === legendIdx, // only show legend on the first eligible chart
         legendgroup: dn.abbreviation,
-        hovertemplate: cfg.unit
-          ? `%{y:.1f} ${cfg.unit}<extra>${dn.abbreviation}</extra>`
-          : `%{y:.1f}<extra>${dn.abbreviation}</extra>`,
+        ...(ahead && ahead.length
+          ? {
+              customdata: ahead.map(a => (a ? ` behind ${a}` : '')) as unknown as PlotData['customdata'],
+              hovertemplate: `%{y:.${cfg.channel === 'gap_ahead' ? 2 : 0}f} ${cfg.unit}%{customdata}<extra>${dn.abbreviation}</extra>`,
+            }
+          : {
+              hovertemplate: cfg.unit
+                ? `%{y:.1f} ${cfg.unit}<extra>${dn.abbreviation}</extra>`
+                : `%{y:.1f}<extra>${dn.abbreviation}</extra>`,
+            }),
       });
     }
   });
@@ -419,24 +436,28 @@ function buildLayout(
 
 const DEFAULT_TOGGLES = Object.fromEntries(CHART_CONFIGS.map(c => [c.channel, c.defaultOn]));
 
-export default function ChartStack({ telemetryData, theme }: ChartStackProps) {
+export default function ChartStack({ telemetryData, theme, label }: ChartStackProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const isDark = theme === 'dark';
 
   const [enabled, toggle] = useChannelToggles(DEFAULT_TOGGLES);
   const hasElevation = (telemetryData.drivers[0]?.channels.elevation?.length ?? 0) > 0;
+  const hasAhead = telemetryData.drivers.some(d => d.channels.dist_ahead?.some(v => Number.isFinite(v)));
+  const unavailable = (c: ChartConfig) => (c.needsElevation && !hasElevation) || (c.needsAhead && !hasAhead);
 
   const activeConfigs = useMemo(
-    () => CHART_CONFIGS.filter(c => enabled[c.channel] && !(c.needsElevation && !hasElevation)),
-    [enabled, hasElevation]
+    () => CHART_CONFIGS.filter(c => enabled[c.channel] && !unavailable(c)),
+    [enabled, hasElevation, hasAhead] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   const toggleItems = CHART_CONFIGS.map(c => ({
     key: c.channel,
     label: c.label,
-    disabled: c.needsElevation && !hasElevation,
-    disabledReason: 'No elevation data for this session',
+    disabled: unavailable(c),
+    disabledReason: c.needsAhead
+      ? 'No car-ahead data for this session (added for sessions processed after Oct 2026)'
+      : 'No elevation data for this session',
   }));
 
   const driverColors = useMemo(() => {
@@ -618,6 +639,21 @@ export default function ChartStack({ telemetryData, theme }: ChartStackProps) {
           <span className="hidden text-[10px] text-[var(--text-secondary)] sm:block ml-auto">
             Scroll to zoom · Drag to pan · Dbl-click to reset
           </span>
+          <button
+            type="button"
+            className={smallButton}
+            disabled={activeConfigs.length === 0}
+            title="Download the telemetry charts as PNG"
+            onClick={() => {
+              if (!containerRef.current) return;
+              const who = telemetryData.drivers.map(d => `${d.abbreviation} L${d.lap_number}`).join(' vs ');
+              const title = `Telemetry — ${who}${label ? ` — ${label}` : ''}`;
+              const file = `${label ?? ''} telemetry ${who}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+              downloadChart(containerRef.current, title, file, isDark);
+            }}
+          >
+            <DownloadIcon /> PNG
+          </button>
         </div>
       </div>
 

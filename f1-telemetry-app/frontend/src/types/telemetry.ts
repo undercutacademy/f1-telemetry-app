@@ -14,6 +14,9 @@ export interface TelemetryChannels {
   actions: number[];
   elevation: number[];   // meters; [] when session has no z data
   vertical_g: number[];  // [] when session has no z data
+  dist_ahead: number[];  // meters to car ahead (NaN = unknown); [] when not in data
+  gap_ahead: number[];   // seconds to car ahead (dist / speed); [] when not in data
+  driver_ahead: string[]; // abbreviation of car ahead ('' = none); [] when not in data
 }
 
 // ─── Driver Information ───────────────────────────────────────────────────────
@@ -96,6 +99,53 @@ export interface LapInfo {
   is_personal_best: boolean;
   is_fastest: boolean;
   is_valid: boolean;
+}
+
+// ─── Session-wide analysis (every driver, every lap) ──────────────────────────
+
+/** One lap of one driver, normalized from analysis.json or derived from laps/*.json. */
+export interface SessionLap {
+  driver: string;
+  lap: number;
+  time: number | null;       // seconds
+  s1: number | null;
+  s2: number | null;
+  s3: number | null;
+  compound: string;
+  tyreLife: number;
+  stint: number;
+  position: number | null;   // null when the data source has no positions
+  pitIn: boolean;
+  pitOut: boolean;
+  sessionTime: number | null; // session clock at lap end (s); null in derived data
+  trackStatus: string;       // FastF1 status digits ('1' green, '4' SC, '5' red, '6'/'7' VSC)
+  hasTelemetry: boolean;
+}
+
+export interface SessionResult {
+  driver: string;
+  position: number | null;
+  grid: number | null;
+  status: string;
+}
+
+export interface WeatherData {
+  time: number[];            // session seconds
+  air_temp: (number | null)[];
+  track_temp: (number | null)[];
+  humidity: (number | null)[];
+  pressure: (number | null)[];
+  wind_speed: (number | null)[];
+  wind_direction: (number | null)[];
+  rainfall: (number | null)[];
+}
+
+export interface SessionAnalysis {
+  /** 'analysis' = analysis.json (true positions, pit flags); 'derived' = rebuilt from laps/*.json */
+  source: 'analysis' | 'derived';
+  laps: SessionLap[];
+  results: SessionResult[];
+  weather: WeatherData | null;
 }
 
 // ─── API Request / Response Types ─────────────────────────────────────────────

@@ -330,7 +330,7 @@ export default function SelectionPanel({
           {/* Add Driver Button */}
           {drivers.length >= 2 && drivers.length < 5 && (
             <button
-              onClick={addDriver}
+              onClick={() => addDriver()}
               className="mt-5 flex h-9 items-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 text-sm font-medium text-[var(--text-secondary)] hover:border-[var(--text-primary)] hover:text-[var(--text-primary)] transition-colors"
             >
               + Add Driver
