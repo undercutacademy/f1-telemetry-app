@@ -164,6 +164,69 @@ def get_elevation(tel: pd.DataFrame, common_dist: np.ndarray) -> list:
     return np.interp(common_dist, dist, z).tolist()
 
 
+def get_dist_ahead(tel: pd.DataFrame, common_dist: np.ndarray) -> list:
+    """
+    DistanceToDriverAhead (m) on the common grid, interpolated over non-NaN
+    source points only; None where the nearest-before source sample is NaN
+    (JSON-safe stand-in for the frontend's NaN). Same rule as the CDN
+    ingest (process_session._dist_ahead). [] when the column is absent.
+    """
+    if "DistanceToDriverAhead" not in tel.columns:
+        return []
+    dist = tel["Distance"].values
+    src = pd.to_numeric(tel["DistanceToDriverAhead"], errors="coerce").values.astype(float)
+    ok = ~np.isnan(src)
+    if not ok.any():
+        return [None] * len(common_dist)
+    vals = np.round(np.interp(common_dist, dist[ok], src[ok]), 1)
+    indices = np.clip(np.searchsorted(dist, common_dist, side="right") - 1, 0, len(dist) - 1)
+    nan_at = np.isnan(src[indices])
+    return [None if m else float(v) for v, m in zip(vals, nan_at)]
+
+
+def get_driver_ahead(tel: pd.DataFrame, common_dist: np.ndarray, abbr_by_number: dict) -> list:
+    """
+    Car ahead, nearest-before on the common grid, as an abbreviation
+    ('' = none, '#<num>' if unknown) — mirrors useTelemetry's driver_ahead.
+    [] when the column is absent.
+    """
+    if "DriverAhead" not in tel.columns:
+        return []
+    dist = tel["Distance"].values
+    indices = np.clip(np.searchsorted(dist, common_dist, side="right") - 1, 0, len(dist) - 1)
+    out = []
+    for v in tel["DriverAhead"].values[indices]:
+        num = "" if v is None or pd.isna(v) else str(v)
+        out.append(abbr_by_number.get(num, f"#{num}") if num else "")
+    return out
+
+
+def compute_gap_ahead(dist_ahead: list, common_dist, time: list) -> list:
+    """Seconds to the car ahead: how long this driver, on this lap's own
+    time-vs-distance profile, takes to reach where the car ahead is now
+    (distance / instantaneous speed spikes in slow corners). Points past the
+    line wrap onto the same lap profile. None when distance is unknown —
+    mirrors useTelemetry.computeGapAhead."""
+    dist = np.asarray(common_dist, dtype=float)
+    t = np.asarray(time, dtype=float)
+    if len(dist) < 2:
+        return [None] * len(dist_ahead)
+    lap_len = dist[-1]
+    lap_time = t[-1] - t[0]
+
+    def time_at(x: float) -> float:
+        laps = np.floor(x / lap_len)
+        return float(np.interp(x - laps * lap_len, dist, t) + laps * lap_time)
+
+    out = []
+    for i, d in enumerate(dist_ahead):
+        if d is None or not np.isfinite(d) or d < 0:
+            out.append(None)
+        else:
+            out.append(round(float(time_at(dist[i] + d) - t[i]), 3))
+    return out
+
+
 def compute_actions(throttle, brake, lateral_g):
     """Per-point driver action class. Priority: braking, full throttle,
     lift & coast, cornering, rolling — mirrors useTelemetry.computeActions."""

@@ -94,6 +94,17 @@ def get_telemetry(req: TelemetryRequest):
             channels["elevation"], channels["time"]
         )
 
+    # Car ahead: distance, time gap, and who (number -> abbreviation)
+    abbr_by_number = {
+        str(int(r["DriverNumber"])): str(r["Abbreviation"])
+        for _, r in session.results.iterrows() if pd.notna(r.get("DriverNumber"))
+    }
+    for i, tel in enumerate(tels):
+        channels = norm["drivers"][i]["channels"]
+        channels["dist_ahead"] = processing.get_dist_ahead(tel, common_dist)
+        channels["gap_ahead"] = processing.compute_gap_ahead(channels["dist_ahead"], common_dist, channels["time"])
+        channels["driver_ahead"] = processing.get_driver_ahead(tel, common_dist, abbr_by_number)
+
     # Track coordinates (use first driver's telemetry for track shape)
     track_x, track_y = processing.get_track_coords(tels[0], common_dist)
 
