@@ -98,7 +98,19 @@ export interface LapInfo {
   tyre_life: number;
   is_personal_best: boolean;
   is_fastest: boolean;
+  /** A clean, representative lap (FastF1's quick laps): used for "fastest" picks. */
   is_valid: boolean;
+  /**
+   * A telemetry file exists for this lap — also true for slow, aborted and unfinished
+   * laps (e.g. a crash on the final attempt). Missing on sessions ingested before
+   * Nov 2026, where only valid laps have telemetry: use lapHasTelemetry().
+   */
+  has_telemetry?: boolean;
+}
+
+/** Whether a lap's telemetry can be opened (old CDN files only have is_valid). */
+export function lapHasTelemetry(lap: Pick<LapInfo, 'is_valid' | 'has_telemetry'>): boolean {
+  return lap.has_telemetry ?? lap.is_valid;
 }
 
 // ─── Session-wide analysis (every driver, every lap) ──────────────────────────

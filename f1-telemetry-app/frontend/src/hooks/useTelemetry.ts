@@ -515,6 +515,7 @@ export function useTelemetry(): UseTelemetryReturn {
       const lapTimes = driverAbbrs.map((abbr, i) => {
         const dLaps = _driversLaps[abbr] ?? [];
         const lap = dLaps.find(l => l.lap_number === resolvedLaps[i]);
+        if (lap && lap.lap_time_seconds == null) return 'Unfinished';
         return lap?.lap_time ?? 'N/A';
       });
 

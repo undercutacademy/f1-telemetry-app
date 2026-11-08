@@ -1,5 +1,5 @@
 import type { LapInfo } from '../types/telemetry';
-import { TYRE_COLORS } from '../types/telemetry';
+import { TYRE_COLORS, lapHasTelemetry } from '../types/telemetry';
 import { adjustColorForTheme, getContrastColor } from '../utils/colors';
 import { useTheme } from '../context/ThemeContext';
 
@@ -166,7 +166,11 @@ export default function LapSelector({
                 (selectedLap === 'fastest' && lap.is_fastest);
               const isFastest = lap.is_fastest;
               const isPersonalBest = lap.is_personal_best;
-              const isInvalid = !lap.is_valid;
+              // Not a clean lap (slow, aborted or unfinished) but its telemetry exists:
+              // openable, shown dimmed and tagged so it isn't mistaken for a push lap.
+              const isOffLap = !lap.is_valid;
+              const isUnfinished = lap.lap_time_seconds == null;
+              const isInvalid = !lapHasTelemetry(lap);
 
               return (
                 <tr
@@ -182,7 +186,7 @@ export default function LapSelector({
                       : isFastest
                       ? '3px solid #FFD700'
                       : '3px solid transparent',
-                    opacity: isInvalid ? 0.5 : 1,
+                    opacity: isInvalid ? 0.5 : isOffLap && !isSelected ? 0.75 : 1,
                   }}
                   onMouseEnter={(e) => {
                     if (!isSelected && !isInvalid) {
@@ -196,7 +200,15 @@ export default function LapSelector({
                         'transparent';
                     }
                   }}
-                  title={isInvalid ? 'No telemetry available for this lap' : undefined}
+                  title={
+                    isInvalid
+                      ? 'No telemetry available for this lap'
+                      : isUnfinished
+                      ? 'Unfinished lap (no lap time) — click to see telemetry up to where it ended'
+                      : isOffLap
+                      ? 'Not a clean lap (slow, aborted or in/out lap) — click to see telemetry'
+                      : undefined
+                  }
                 >
                   {/* Lap number */}
                   <td className="px-2 py-1.5">
@@ -237,7 +249,11 @@ export default function LapSelector({
                         fontWeight: isFastest || isPersonalBest ? '600' : '400',
                       }}
                     >
-                      {lap.lap_time}
+                      {isUnfinished && !isInvalid ? (
+                        <span className="italic text-[var(--text-secondary)]">Unfinished</span>
+                      ) : (
+                        lap.lap_time
+                      )}
                     </span>
                   </td>
 

@@ -1,4 +1,5 @@
 import type { DriverListItem, LapInfo, SessionLap, SessionResult } from '../types/telemetry';
+import { lapHasTelemetry } from '../types/telemetry';
 import { adjustColorForTheme, offsetTeamColor } from './colors';
 
 // ─── Time helpers ─────────────────────────────────────────────────────────────
@@ -95,7 +96,7 @@ export function lapsFromLapFiles(perDriver: Record<string, LapInfo[]>): SessionL
         pitOut: newStint,
         sessionTime: null,
         trackStatus: '',
-        hasTelemetry: l.is_valid,
+        hasTelemetry: lapHasTelemetry(l),
       });
     });
     out.push(...driverLaps);

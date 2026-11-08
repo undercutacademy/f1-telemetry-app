@@ -3,6 +3,7 @@ import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { useSelections } from './hooks/useSelections';
 import { useTelemetry } from './hooks/useTelemetry';
 import type { TelemetryData, TelemetryRequest } from './types/telemetry';
+import { lapHasTelemetry } from './types/telemetry';
 import Header from './components/Header';
 import SelectionPanel from './components/SelectionPanel';
 import TrackMap from './components/TrackMap';
@@ -286,11 +287,11 @@ function AppInner() {
     }
     if (drivers.some(d => d.lap === null || !telemetry.driversLaps[d.abbr!])) return; // still loading
 
-    // A shared or clicked lap without telemetry (in/out lap, red flag) falls back to the fastest lap.
+    // A shared or clicked lap without telemetry falls back to the fastest lap.
     let corrected = false;
     drivers.forEach((d, i) => {
       const laps = telemetry.driversLaps[d.abbr!];
-      if (typeof d.lap === 'number' && !laps.some(l => l.lap_number === d.lap && l.is_valid)) {
+      if (typeof d.lap === 'number' && !laps.some(l => l.lap_number === d.lap && lapHasTelemetry(l))) {
         const best = laps.find(l => l.is_fastest && l.is_valid) ?? laps.find(l => l.is_valid);
         if (best && best.lap_number !== d.lap) { setDriverLap(i, best.lap_number); corrected = true; }
       }
@@ -413,7 +414,8 @@ function AppInner() {
                   ))}
 
                   {/* Lap time delta between D1 and D2, signed: who was faster and by how much */}
-                  {d1 && d2 && (
+                  {/* Hidden when either lap has no time (unfinished lap) */}
+                  {d1 && d2 && Number.isFinite(lapDelta) && (
                     <div className="rounded-xl border border-[var(--border)] bg-[var(--panel-bg)] p-4 shadow-sm mt-2">
                       <h3 className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider">
                         Lap Time Delta (D1 vs D2)
