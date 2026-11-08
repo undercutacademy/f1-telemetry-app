@@ -42,6 +42,12 @@ const MIRROR_TIMEOUT_MS = 8000;
 // first wins — e.g. lap files without `has_telemetry`, which kept unfinished laps locked.
 const PRIMARY_HEAD_START_MS = 1200;
 
+// Always revalidate with the mirror (a cheap 304 when unchanged). jsDelivr tells
+// browsers to keep files for 7 days and githack for a year, so a visitor who opened
+// a session before its files were rewritten kept the old copy — a hard refresh does
+// not help, since these fetches happen after the page has loaded.
+const FETCH_OPTS: RequestInit = { redirect: 'error', cache: 'no-cache' };
+
 /** Opens after the head start, or early via open() when the primary fails. */
 function backupGate() {
   let open!: () => void;
@@ -68,7 +74,7 @@ async function raceMirrors<T>(path: string): Promise<T> {
     try {
       // redirect: 'error' surfaces a mirror that bounces us to an insecure URL
       // as a normal failure instead of a browser mixed-content console error.
-      const res = await fetch(url, { signal: ctrl.signal, redirect: 'error' });
+      const res = await fetch(url, { ...FETCH_OPTS, signal: ctrl.signal });
       if (!res.ok) throw new Error(`${res.status} ${url}`);
       if (primary) gate.hold();
       return (await res.json()) as T;
@@ -129,7 +135,7 @@ export async function cdnGetOptional<T>(path: string): Promise<T | null> {
       controllers.push(ctrl);
       const timeout = setTimeout(() => ctrl.abort(), MIRROR_TIMEOUT_MS);
       try {
-        const res = await fetch(m(path), { signal: ctrl.signal, redirect: 'error' });
+        const res = await fetch(m(path), { ...FETCH_OPTS, signal: ctrl.signal });
         if (res.ok) {
           if (primary) gate.hold();
           resolve((await res.json()) as T);
