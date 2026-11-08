@@ -30,16 +30,38 @@ const MIRRORS = LOCAL_DATA_URL
   ? [(p: string) => `${LOCAL_DATA_URL.replace(/\/$/, '')}/${p}`]
   : CDN_MIRRORS;
 
-// Race all mirrors in parallel; first 2xx response wins, the rest are aborted.
 // Each mirror gets its OWN AbortController so one mirror's timeout (or a transient
 // network drop, e.g. ERR_NETWORK_CHANGED on a wifi/VPN switch) cannot kill the
 // others. A shared controller made any brief stall fail all three at once.
 const MIRROR_TIMEOUT_MS = 8000;
 
+// The first mirror (jsDelivr, the one we purge) gets a head start; the backups only
+// join if it hasn't answered by then, or as soon as it fails. They must not race from
+// t=0: when an existing file is rewritten they can keep serving the old copy
+// (rawcdn.githack caches branch URLs ~permanently), and a stale copy that answers
+// first wins — e.g. lap files without `has_telemetry`, which kept unfinished laps locked.
+const PRIMARY_HEAD_START_MS = 1200;
+
+/** Opens after the head start, or early via open() when the primary fails. */
+function backupGate() {
+  let open!: () => void;
+  const opened = new Promise<void>((r) => { open = r; });
+  const timer = setTimeout(() => open(), PRIMARY_HEAD_START_MS);
+  // hold(): the primary answered (or the race is over) — the backups never start.
+  return { opened, open, hold: () => clearTimeout(timer) };
+}
+
+// First 2xx response wins, the rest are aborted.
 async function raceMirrors<T>(path: string): Promise<T> {
   const controllers: AbortController[] = [];
+  const gate = backupGate();
+  let done = false;
 
-  const tryMirror = async (url: string): Promise<T> => {
+  const tryMirror = async (url: string, primary: boolean): Promise<T> => {
+    if (!primary) {
+      await gate.opened;
+      if (done) throw new Error('race already settled');
+    }
     const ctrl = new AbortController();
     controllers.push(ctrl);
     const timeout = setTimeout(() => ctrl.abort(), MIRROR_TIMEOUT_MS);
@@ -48,16 +70,22 @@ async function raceMirrors<T>(path: string): Promise<T> {
       // as a normal failure instead of a browser mixed-content console error.
       const res = await fetch(url, { signal: ctrl.signal, redirect: 'error' });
       if (!res.ok) throw new Error(`${res.status} ${url}`);
+      if (primary) gate.hold();
       return (await res.json()) as T;
+    } catch (err) {
+      if (primary) gate.open();
+      throw err;
     } finally {
       clearTimeout(timeout);
     }
   };
 
   try {
-    return await Promise.any(MIRRORS.map((m) => tryMirror(m(path))));
+    return await Promise.any(MIRRORS.map((m, i) => tryMirror(m(path), i === 0)));
   } finally {
     // Cancel the losers so we stop downloading data we no longer need.
+    done = true;
+    gate.hold();
     controllers.forEach((c) => c.abort());
   }
 }
@@ -81,30 +109,46 @@ export async function cdnGet<T>(path: string): Promise<T> {
 // For files that only exist for some sessions (analysis.json, weather.json).
 // Resolves null once two mirrors agree on a 404 instead of waiting for the slow
 // mirror's timeout. One 404 alone is not trusted: a stale mirror 404s a file
-// that was pushed after it last refreshed.
+// that was pushed after it last refreshed. Same jsDelivr head start as raceMirrors.
 export async function cdnGetOptional<T>(path: string): Promise<T | null> {
   const needed = Math.min(2, MIRRORS.length);
   const controllers: AbortController[] = [];
+  const gate = backupGate();
+  let done = false;
   let notFound = 0;
 
   const result = await new Promise<T | null>((resolve) => {
     let settled = 0;
-    MIRRORS.forEach(async (m) => {
+    MIRRORS.forEach(async (m, i) => {
+      const primary = i === 0;
+      if (!primary) {
+        await gate.opened;
+        if (done) return;
+      }
       const ctrl = new AbortController();
       controllers.push(ctrl);
       const timeout = setTimeout(() => ctrl.abort(), MIRROR_TIMEOUT_MS);
       try {
         const res = await fetch(m(path), { signal: ctrl.signal, redirect: 'error' });
-        if (res.ok) { resolve((await res.json()) as T); return; }
+        if (res.ok) {
+          if (primary) gate.hold();
+          resolve((await res.json()) as T);
+          return;
+        }
+        if (primary) gate.open();
         if (res.status === 404 && ++notFound >= needed) resolve(null);
-      } catch { /* timeout / network: just lose the race */ }
-      finally {
+      } catch {
+        // timeout / network: just lose the race
+        if (primary) gate.open();
+      } finally {
         clearTimeout(timeout);
         if (++settled === MIRRORS.length) resolve(null);
       }
     });
   });
 
+  done = true;
+  gate.hold();
   controllers.forEach((c) => c.abort());
   return result;
 }
